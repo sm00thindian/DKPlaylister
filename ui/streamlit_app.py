@@ -339,7 +339,37 @@ elif mode == "Manage Catalog":
         if styles:
             for s in styles:
                 with st.expander(f"{s.name} (ID {s.id})"):
-                    st.text_area("Raw Prompt", value=s.raw_prompt, height=180, disabled=True, key=f"cat_style_{s.id}")
+                    st.text_area("Current Prompt", value=s.raw_prompt, height=160, disabled=True, key=f"view_style_{s.id}")
+
+                    # Edit mode
+                    edit_key = f"edit_style_{s.id}"
+                    if st.checkbox("Edit this style", key=edit_key):
+                        with st.form(f"edit_style_form_{s.id}"):
+                            edited_name = st.text_input("Style Name", value=s.name)
+                            edited_prompt = st.text_area("Style Description", value=s.raw_prompt, height=200)
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                save_edit = st.form_submit_button("Save Changes")
+                            with col2:
+                                delete_style = st.form_submit_button("Delete Style", type="secondary")
+
+                            if save_edit:
+                                updated_style = StyleProfile(
+                                    id=s.id,
+                                    band_id=current_band_id,
+                                    name=edited_name,
+                                    raw_prompt=edited_prompt
+                                )
+                                style_repo.update(updated_style)
+                                st.success("Style updated!")
+                                st.rerun()
+
+                            if delete_style:
+                                confirm = st.checkbox(f"Confirm delete '{s.name}'?", key=f"confirm_del_style_{s.id}")
+                                if confirm:
+                                    style_repo.delete(s.id)
+                                    st.success(f"Deleted style '{s.name}'")
+                                    st.rerun()
         else:
             st.info("No styles yet for this band.")
 
@@ -374,6 +404,36 @@ elif mode == "Manage Catalog":
             for a in albums:
                 with st.expander(f"{a.title} ({a.release_date or 'No date'}) - ID {a.id}"):
                     st.write(f"**Notes:** {a.notes or '—'}")
+
+                    edit_key = f"edit_album_{a.id}"
+                    if st.checkbox("Edit this album", key=edit_key):
+                        with st.form(f"edit_album_form_{a.id}"):
+                            edited_title = st.text_input("Album Title", value=a.title)
+                            edited_date = st.text_input("Release Date (YYYY-MM-DD)", value=a.release_date or "")
+                            edited_notes = st.text_area("Notes", value=a.notes or "")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                save_edit = st.form_submit_button("Save Changes")
+                            with col2:
+                                delete_album = st.form_submit_button("Delete Album", type="secondary")
+
+                            if save_edit:
+                                updated_album = Album(
+                                    id=a.id,
+                                    band_id=current_band_id,
+                                    title=edited_title,
+                                    release_date=edited_date or None,
+                                    notes=edited_notes or None
+                                )
+                                album_repo.update(updated_album)
+                                st.success("Album updated!")
+                                st.rerun()
+
+                            if delete_album:
+                                if st.checkbox(f"Confirm delete '{a.title}'?", key=f"confirm_del_album_{a.id}"):
+                                    album_repo.delete(a.id)
+                                    st.success(f"Deleted album '{a.title}'")
+                                    st.rerun()
         else:
             st.info("No albums yet.")
 
@@ -405,7 +465,6 @@ elif mode == "Manage Catalog":
     with tab3:
         st.subheader("Songs / Lyrics")
 
-        # Fetch albums for this band so we can link songs to them
         band_albums = album_repo.list_by_band(current_band_id)
         album_lookup = {a.id: a.title for a in band_albums}
 
@@ -415,15 +474,64 @@ elif mode == "Manage Catalog":
             for s in songs:
                 album_name = album_lookup.get(s.album_id, "No Album") if s.album_id else "No Album"
                 with st.expander(f"{s.title} ({album_name}) - ID {s.id}"):
-                    st.text_area("Lyrics", value=s.lyrics, height=200, disabled=True, key=f"cat_song_{s.id}")
+                    st.text_area("Lyrics", value=s.lyrics, height=180, disabled=True, key=f"view_song_{s.id}")
                     st.write(f"**Notes:** {s.notes or '—'}")
                     st.caption(f"Album: {album_name}")
+
+                    # Edit mode for song
+                    edit_key = f"edit_song_{s.id}"
+                    if st.checkbox("Edit this song", key=edit_key):
+                        with st.form(f"edit_song_form_{s.id}"):
+                            edited_title = st.text_input("Title", value=s.title)
+                            edited_lyrics = st.text_area("Lyrics", value=s.lyrics, height=200)
+                            edited_notes = st.text_area("Notes", value=s.notes or "")
+
+                            # Album reassignment
+                            album_opts = ["No Album"] + [f"{a.title} (ID {a.id})" for a in band_albums]
+                            current_album_label = "No Album"
+                            if s.album_id and s.album_id in album_lookup:
+                                current_album_label = f"{album_lookup[s.album_id]} (ID {s.album_id})"
+
+                            new_album_label = st.selectbox(
+                                "Album", 
+                                album_opts, 
+                                index=album_opts.index(current_album_label) if current_album_label in album_opts else 0,
+                                key=f"edit_album_{s.id}"
+                            )
+
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                save_song = st.form_submit_button("Save Changes")
+                            with col2:
+                                delete_song = st.form_submit_button("Delete Song", type="secondary")
+
+                            if save_song:
+                                chosen_album_id = None
+                                if new_album_label != "No Album":
+                                    chosen_album_id = int(new_album_label.split("(ID ")[1].split(")")[0])
+
+                                updated_song = Song(
+                                    id=s.id,
+                                    band_id=current_band_id,
+                                    album_id=chosen_album_id,
+                                    title=edited_title,
+                                    lyrics=edited_lyrics,
+                                    notes=edited_notes or None
+                                )
+                                song_repo.update(updated_song)
+                                st.success("Song updated!")
+                                st.rerun()
+
+                            if delete_song:
+                                if st.checkbox(f"Confirm delete '{s.title}'?", key=f"confirm_del_song_{s.id}"):
+                                    song_repo.delete(s.id)
+                                    st.success(f"Deleted song '{s.title}'")
+                                    st.rerun()
         else:
             st.info("No songs yet for this band.")
 
         st.markdown("**Add New Song**")
 
-        # Use a counter so the form gets a fresh key after submission → fields clear
         if "song_form_counter" not in st.session_state:
             st.session_state.song_form_counter = 0
 
@@ -434,16 +542,14 @@ elif mode == "Manage Catalog":
             song_lyrics = st.text_area("Lyrics", height=250)
             song_notes = st.text_area("Notes")
 
-            # Album selection
             album_options = ["No Album"] + [f"{a.title} (ID {a.id})" for a in band_albums]
-            selected_album_label = st.selectbox("Album (optional)", album_options, key="song_album_select")
+            selected_album_label = st.selectbox("Album (optional)", album_options, key="new_song_album")
 
             submitted = st.form_submit_button("Save Song")
 
             if submitted and song_title and song_lyrics:
                 chosen_album_id = None
                 if selected_album_label != "No Album":
-                    # Extract ID from the label
                     chosen_album_id = int(selected_album_label.split("(ID ")[1].split(")")[0])
 
                 new_song = Song(
@@ -455,8 +561,6 @@ elif mode == "Manage Catalog":
                 )
                 db_s = song_repo.create(new_song)
                 st.success(f"Song '{song_title}' added (ID {db_s.id})")
-
-                # Increment counter so next time the form renders with clean fields
                 st.session_state.song_form_counter += 1
                 st.rerun()
 
