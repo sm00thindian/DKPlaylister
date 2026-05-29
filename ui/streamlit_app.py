@@ -20,10 +20,15 @@ from dotenv import load_dotenv
 # Add src to path so we can import the package
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from dkplaylister.storage import PlaylistRepository, StyleProfileRepository
+from dkplaylister.storage import (
+    PlaylistRepository, 
+    StyleProfileRepository,
+    BandRepository,
+    SongRepository,
+)
 from dkplaylister.llm import get_provider
 from dkplaylister.scoring import PlaylistScorer
-from dkplaylister.models import StyleProfile
+from dkplaylister.models import StyleProfile, Band, Song
 
 load_dotenv()
 
@@ -53,12 +58,45 @@ def get_llm():
     return get_provider("grok")
 
 playlist_repo, style_repo = get_repos()
+band_repo = BandRepository()
+song_repo = SongRepository()
 llm = get_llm()
+
+# Initialize band selection
+if "current_band_id" not in st.session_state:
+    default_band = band_repo.get_default()
+    st.session_state.current_band_id = default_band.id if default_band else None
 
 # --- Sidebar ---
 
 st.sidebar.title("DKPlaylister")
 st.sidebar.markdown("Local tool for high-signal playlist pitching")
+
+# --- Band Selection ---
+bands = band_repo.list_all()
+if bands:
+    band_options = {f"{b.name} ({b.slug})": b.id for b in bands}
+    current_band_id = st.session_state.current_band_id
+
+    # Find current selection
+    current_label = None
+    for label, bid in band_options.items():
+        if bid == current_band_id:
+            current_label = label
+            break
+
+    selected_label = st.sidebar.selectbox(
+        "Current Band",
+        list(band_options.keys()),
+        index=list(band_options.keys()).index(current_label) if current_label else 0,
+    )
+    st.session_state.current_band_id = band_options[selected_label]
+else:
+    st.sidebar.warning("No bands created yet. Use CLI: `dkplaylister band create`")
+
+current_band_id = st.session_state.current_band_id
+
+st.sidebar.divider()
 
 # --- Mode handling ---
 if "desired_mode" not in st.session_state:
@@ -126,44 +164,71 @@ if mode == "Review Targets":
 elif mode == "Generate Pitch":
     st.header("Generate Personalized Pitch")
 
+    if not current_band_id:
+        st.warning("Please select a band first.")
+        st.stop()
+
     if not llm:
         st.error("XAI_API_KEY not found. Add it to your .env to generate pitches with Grok.")
         st.stop()
 
-    # Style selection
-    style = latest_style
-    if not style:
-        st.warning("No Style Profile found. Please go to 'Manage Style' first.")
+    # Get styles and songs for the current band
+    styles = style_repo.list_all(band_id=current_band_id)
+    songs = song_repo.list_by_band(current_band_id)
+
+    if not styles:
+        st.warning("No styles for this band. Go to 'Manage Style' to create one.")
         st.stop()
 
-    st.subheader("1. Select Target Playlist")
+    if not songs:
+        st.info("No songs yet for this band. You can still paste lyrics manually.")
+
+    # Style selection
+    style_options = {f"{s.name} (ID {s.id})": s for s in styles}
+    selected_style_label = st.selectbox("Style Profile", list(style_options.keys()))
+    style = style_options[selected_style_label]
+
+    # Song selection (optional)
+    st.subheader("1. Song (optional)")
+    use_saved_song = st.checkbox("Use a saved song", value=bool(songs))
+
+    song_title = ""
+    lyrics = ""
+
+    if use_saved_song and songs:
+        song_options = {f"{s.title} (ID {s.id})": s for s in songs}
+        selected_song_label = st.selectbox("Saved Song", list(song_options.keys()))
+        selected_song = song_options[selected_song_label]
+        song_title = selected_song.title
+        lyrics = selected_song.lyrics
+    else:
+        song_title = st.text_input("Song Title", value="If I Get My Say")
+        lyrics = st.text_area("Lyrics", height=280, value="""[Paste your full lyrics here]""")
+
+    # Target selection
+    st.subheader("2. Target Playlist")
     targets = playlist_repo.list_all(min_score=40)
 
     if not targets:
-        st.info("No targets available. Import some first using the CLI (`dkplaylister import`).")
+        st.info("No targets available. Import some first using the CLI.")
         st.stop()
 
     target_options = {f"{t.name} (Score: {t.current_score.total_value_score:.0f})": t for t in targets}
 
-    # Pre-select target if user clicked "Use for Pitch" from the list
-    selected_target = None
+    # Pre-select target if user clicked "Use for Pitch"
+    default_target_index = 0
     if st.session_state.selected_target:
-        # Try to find the exact target by ID (more reliable than index)
-        for t in targets:
+        for i, t in enumerate(targets):
             if t.id == st.session_state.selected_target.id:
-                selected_target = t
+                default_target_index = i
                 break
-        # Clear it so it doesn't keep forcing on future reruns
-        st.session_state.selected_target = None
 
-    if selected_target is None:
-        selected_label = st.selectbox("Target Playlist", list(target_options.keys()))
-        selected_target = target_options[selected_label]
-    else:
-        # Force the pre-selected one
-        selected_label = f"{selected_target.name} (Score: {selected_target.current_score.total_value_score:.0f})"
-        st.info(f"**Pre-selected from your targets list:** {selected_target.name}")
-        selected_target = target_options.get(selected_label, selected_target)
+    selected_target_label = st.selectbox("Target Playlist", list(target_options.keys()), index=default_target_index)
+    selected_target = target_options[selected_target_label]
+
+    # Clear pre-selection
+    if st.session_state.selected_target:
+        st.session_state.selected_target = None
 
     # Show target context
     with st.expander("Target details", expanded=False):
@@ -172,46 +237,11 @@ elif mode == "Generate Pitch":
         if selected_target.current_score:
             st.write(f"Score vs your style: **{selected_target.current_score.total_value_score:.0f}/100**")
             st.caption(selected_target.current_score.explanation)
-        if selected_target.description:
-            st.write("Description:")
-            st.caption(selected_target.description[:400] + "..." if len(selected_target.description) > 400 else selected_target.description)
 
-    st.subheader("2. Song Details")
+    format_choice = st.selectbox("Pitch Format", ["email", "instagram_dm", "submission_form"])
 
-    # Simple in-session song storage
-    if "songs" not in st.session_state:
-        st.session_state.songs = {}
-
-    song_title = st.text_input("Song Title", value="If I Get My Say", key="song_title_input")
-
-    col_a, col_b = st.columns([3, 1])
-    with col_a:
-        lyrics = st.text_area("Lyrics", height=280, value="""[Paste your full lyrics here]""", key="lyrics_input")
-    with col_b:
-        st.markdown("**Quick songs**")
-        if st.button("Load 'If I Get My Say'"):
-            st.session_state.songs["If I Get My Say"] = lyrics  # will be updated on next rerun
-            st.rerun()
-
-        # Show previously used songs in this session
-        if st.session_state.songs:
-            for saved_title in list(st.session_state.songs.keys()):
-                if st.button(f"Load: {saved_title}", key=f"load_{saved_title}"):
-                    # This is a bit hacky without proper state management, but works for now
-                    pass
-
-    format_choice = st.selectbox("Pitch Format", ["email", "instagram_dm", "submission_form"], key="format_select")
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        generate_clicked = st.button("Generate Pitch with Grok", type="primary", use_container_width=True)
-    with col2:
-        if "last_pitch" in st.session_state:
-            if st.button("Regenerate (same inputs)", use_container_width=True):
-                generate_clicked = True
-
-    if generate_clicked:
-        with st.spinner("Generating pitch with Grok..."):
+    if st.button("Generate Pitch with Grok", type="primary"):
+        with st.spinner("Generating pitch..."):
             try:
                 generated = llm.generate_pitch(
                     style_profile=style,
@@ -223,26 +253,23 @@ elif mode == "Generate Pitch":
                 st.session_state.last_pitch = generated
                 st.session_state.last_song = song_title
                 st.session_state.last_target = selected_target
-                st.session_state.last_format = format_choice
-                # Save song for quick reload in this session
-                st.session_state.songs[song_title] = lyrics
+                st.session_state.last_style = style
             except Exception as e:
                 st.error(f"Failed to generate pitch: {e}")
 
     if "last_pitch" in st.session_state:
         st.subheader(f"Generated Pitch — {st.session_state.last_song}")
 
-        # Show which target/style was used
-        st.caption(f"Target: **{st.session_state.last_target.name}** | Style: **{style.name}** | Format: **{st.session_state.get('last_format', format_choice)}**")
+        st.caption(f"Band: **{current_band_id}** | Style: **{st.session_state.last_style.name}** | Target: **{st.session_state.last_target.name}**")
 
         edited = st.text_area("Edit as needed", value=st.session_state.last_pitch, height=420, key="edited_pitch")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
             if st.button("Save Pitch to File", use_container_width=True):
                 pitches_dir = Path("pitches")
                 pitches_dir.mkdir(exist_ok=True)
-                filename = f"{st.session_state.last_song.replace(' ', '_')}_{st.session_state.last_target.name[:30].replace(' ', '_')}.txt"
+                filename = f"{st.session_state.last_song.replace(' ', '_')}.txt"
                 filepath = pitches_dir / filename
                 filepath.write_text(edited)
                 st.success(f"Saved to {filepath}")
@@ -255,31 +282,37 @@ elif mode == "Generate Pitch":
                 use_container_width=True,
             )
 
-        with col3:
-            if st.button("Copy to Clipboard (manual)", use_container_width=True):
-                st.info("Select the text above and copy (Cmd/Ctrl+C)")
-
 elif mode == "Manage Style":
-    st.header("Your Style Profile")
+    st.header("Style Profiles")
 
-    style = latest_style
+    if not current_band_id:
+        st.warning("Please select or create a band first.")
+        st.stop()
 
-    if style:
-        st.subheader(f"Current Profile: {style.name} (ID {style.id})")
-        st.text_area("Raw Prompt", value=style.raw_prompt, height=300, disabled=True)
+    styles = style_repo.list_all(band_id=current_band_id)
+
+    if styles:
+        st.subheader(f"Styles for current band (ID {current_band_id})")
+        for s in styles:
+            with st.expander(f"{s.name} (ID {s.id})"):
+                st.text_area("Raw Prompt", value=s.raw_prompt, height=200, disabled=True, key=f"style_{s.id}")
     else:
-        st.info("No Style Profile saved yet.")
+        st.info("No styles for this band yet.")
 
-    st.subheader("Load / Update Style")
-    uploaded = st.file_uploader("Upload a text file with your style description", type=["txt", "md"])
-    new_name = st.text_input("Profile Name", value="My Current Style")
+    st.subheader("Add New Style")
+    uploaded = st.file_uploader("Upload a text file with your style description", type=["txt", "md"], key="style_upload")
+    new_name = st.text_input("Style Name", value="New Style", key="new_style_name")
 
-    if st.button("Save as New Style Profile") and uploaded:
+    if st.button("Save New Style", key="save_new_style") and uploaded:
         content = uploaded.read().decode("utf-8").strip()
         if content:
-            new_style = StyleProfile(raw_prompt=content, name=new_name)
+            new_style = StyleProfile(
+                band_id=current_band_id,
+                raw_prompt=content,
+                name=new_name
+            )
             db_profile = style_repo.create(new_style)
-            st.success(f"Saved new Style Profile (ID: {db_profile.id})")
+            st.success(f"Saved new Style (ID: {db_profile.id})")
             st.rerun()
 
 st.sidebar.markdown("---")
