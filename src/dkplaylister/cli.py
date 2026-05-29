@@ -26,6 +26,54 @@ from dkplaylister.scoring import (
 from dkplaylister.spotify import fetch_playlist
 from dkplaylister.storage import PlaylistRepository, StyleProfileRepository
 
+
+def _import_playlist(
+    url: str,
+    source: str = "playlister",
+    query: Optional[str] = None,
+    name: Optional[str] = None,
+    score_it: bool = True,
+    verbose: bool = True,
+) -> Optional[int]:
+    """
+    Core logic to import a single playlist.
+    Returns the database ID if successful, None otherwise.
+    """
+    repo = PlaylistRepository()
+    style_repo = StyleProfileRepository()
+
+    if verbose:
+        console.print(f"[dim]Fetching {url}...[/]")
+
+    playlist = fetch_playlist(url)
+    if not playlist:
+        if verbose:
+            console.print(f"[red]  ✗ Could not fetch playlist from Spotify[/]")
+        return None
+
+    if name:
+        playlist.name = name
+
+    playlist.source = source.lower()  # type: ignore
+    playlist.discovery_query = query
+
+    if score_it:
+        style = style_repo.get_latest()
+        if style:
+            try:
+                scorer = PlaylistScorer(style)
+                scorer.score(playlist)
+                if verbose:
+                    console.print(f"[dim]  Scored: {playlist.current_score.total_value_score}/100[/]")
+            except Exception as e:
+                if verbose:
+                    console.print(f"[yellow]  Warning: Could not score ({e})[/]")
+        elif verbose:
+            console.print("[dim]  No Style Profile found — skipping scoring.[/]")
+
+    db_playlist = repo.create_or_update(playlist)
+    return db_playlist.id
+
 app = typer.Typer(
     name="dkplaylister",
     help="Mine high-value playlists. Generate powerful Grok-powered pitches from your actual lyrics and style.",
@@ -321,46 +369,29 @@ def add(
     name: Optional[str] = typer.Option(None, "--name", help="Override playlist name"),
     score_it: bool = typer.Option(True, "--score/--no-score", help="Automatically score against latest StyleProfile"),
 ):
-    """Add a playlist (typically from Playlister) into your targets database.
+    """Add a single playlist (typically from Playlister) into your targets database.
 
-    This is the main command for the semi-automatic workflow.
-    Example: dkplaylister add "https://open.spotify.com/playlist/57Oh6iT1OjceyZVrE95Cv6" --query "Indie Cinematic"
+    For importing many playlists at once, use `dkplaylister import` instead.
     """
-    repo = PlaylistRepository()
-    style_repo = StyleProfileRepository()
+    playlist_id = _import_playlist(
+        url=url,
+        source=source,
+        query=query,
+        name=name,
+        score_it=score_it,
+        verbose=True,
+    )
 
-    console.print(f"[dim]Fetching playlist data from Spotify...[/]")
-
-    playlist = fetch_playlist(url)
-    if not playlist:
-        console.print(f"[red]Could not fetch playlist from Spotify. Check the URL.[/]")
+    if playlist_id is None:
         raise typer.Exit(1)
 
-    if name:
-        playlist.name = name
-
-    # Set provenance
-    playlist.source = source.lower()  # type: ignore
-    playlist.discovery_query = query
-
-    # Optional scoring
-    if score_it:
-        style = style_repo.get_latest()
-        if style:
-            try:
-                scorer = PlaylistScorer(style)
-                scorer.score(playlist)
-                console.print(f"[dim]Scored: {playlist.current_score.total_value_score}/100[/]")
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not score playlist ({e})[/]")
-        else:
-            console.print("[dim]No Style Profile found — skipping scoring.[/]")
-
-    db_playlist = repo.create_or_update(playlist)
+    # Re-fetch for nice output
+    repo = PlaylistRepository()
+    playlist = repo.get_by_id(playlist_id)
 
     console.print(
         Panel.fit(
-            f"[green]✓[/] Added/updated playlist (ID: {db_playlist.id})\n"
+            f"[green]✓[/] Added/updated playlist (ID: {playlist_id})\n"
             f"Name: {playlist.name}\n"
             f"Followers: {playlist.follower_count or 'N/A'}\n"
             f"Source: {source} | Query: {query or 'N/A'}",
@@ -368,6 +399,78 @@ def add(
             border_style="green",
         )
     )
+
+
+@app.command("import")
+def import_playlists(
+    urls: list[str] = typer.Argument(None, help="One or more Spotify playlist URLs"),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="File containing one Spotify URL per line"),
+    source: str = typer.Option("playlister", "--source", help="playlister | spotify | manual"),
+    query: Optional[str] = typer.Option(None, "--query", "-q", help="Playlister search term (applied to all imported playlists)"),
+    score_it: bool = typer.Option(True, "--score/--no-score", help="Score all imported playlists"),
+):
+    """
+    Bulk import playlists (ideal for results from Playlister.com).
+
+    You can pass URLs directly or use --file with a text file (one URL per line).
+
+    Examples:
+      dkplaylister import https://open.spotify.com/playlist/xxx --query "Indie Cinematic"
+      dkplaylister import --file my-playlister-results.txt --query "Cinematic"
+    """
+    all_urls: list[str] = []
+
+    if file:
+        if not file.exists():
+            console.print(f"[red]File not found: {file}[/]")
+            raise typer.Exit(1)
+        all_urls.extend([line.strip() for line in file.read_text().splitlines() if line.strip() and not line.strip().startswith("#")])
+
+    if urls:
+        all_urls.extend(urls)
+
+    if not all_urls:
+        console.print("[yellow]No URLs provided. Use positional arguments or --file.[/]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Importing {len(all_urls)} playlist(s)...[/]\n")
+
+    success = 0
+    failed = 0
+    skipped = 0
+
+    for i, url in enumerate(all_urls, 1):
+        console.print(f"[{i}/{len(all_urls)}] {url}")
+
+        # Check for duplicates early
+        repo = PlaylistRepository()
+        # Simple check - we can improve later
+        existing = [p for p in repo.list_all() if str(p.url) == url]
+        if existing:
+            console.print("  [dim]→ Already in database, skipping[/]")
+            skipped += 1
+            continue
+
+        playlist_id = _import_playlist(
+            url=url,
+            source=source,
+            query=query,
+            score_it=score_it,
+            verbose=False,
+        )
+
+        if playlist_id:
+            success += 1
+            console.print(f"  [green]✓ Imported (ID: {playlist_id})[/]")
+        else:
+            failed += 1
+            console.print("  [red]✗ Failed[/]")
+
+    console.print("\n" + "=" * 50)
+    console.print(f"[bold]Import complete[/]")
+    console.print(f"  Success: {success}")
+    console.print(f"  Failed:  {failed}")
+    console.print(f"  Skipped (duplicates): {skipped}")
 
 
 @app.command("targets")
@@ -380,7 +483,7 @@ def targets_list(
     targets = repo.list_all(min_score=min_score)[:limit]
 
     if not targets:
-        console.print("[yellow]No targets found. Use [bold]dkplaylister add[/] to start importing from Playlister.[/]")
+        console.print("[yellow]No targets found. Use [bold]dkplaylister import[/] or [bold]add[/] to bring in playlists from Playlister.[/]")
         return
 
     table = Table(title=f"Your Targets (showing {len(targets)})")

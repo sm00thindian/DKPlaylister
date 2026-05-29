@@ -8,13 +8,6 @@ Aligned with February 2026 Spotify Web API changes:
 - Rate limiting is handled at the Spotify client layer (see spotify.py).
 """
 
-Core idea:
-- We want high-value playlists for *this specific artist*, not just big numbers.
-- Primary signals: Activity + Fit
-- Secondary: Openness, Contact quality, Follower reach (log scaled)
-- Penalties for risk signals
-"""
-
 from __future__ import annotations
 
 import json
@@ -34,7 +27,7 @@ from dkplaylister.models import Playlist, ScoreBreakdown, StyleProfile
 
 @dataclass
 class ScoringConfig:
-    """Configurable weights for playlist scoring (all values 0.0–1.0)."""
+    """Configurable weights for playlist scoring (all values 0.0-1.0)."""
 
     # Main category weights (should sum close to 1.0)
     weight_activity: float = 0.25
@@ -103,7 +96,7 @@ class PlaylistScorer:
         # 5. Contact Quality
         breakdown.contact_quality_score = self._score_contact_quality(playlist)
 
-        # 6. History (placeholder for now – will improve with Submission data)
+        # 6. History (placeholder for now - will improve with Submission data)
         breakdown.personal_history_bonus = 0.0
 
         # 7. Risk Penalty
@@ -332,6 +325,11 @@ class PlaylistScorer:
             reasons.append("balanced profile")
 
         return ", ".join(reasons).capitalize() + "."
+
+
+# =============================================================================
+# Config Persistence (simple JSON-based for now)
+# =============================================================================
 
 
 # =============================================================================
