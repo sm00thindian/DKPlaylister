@@ -270,6 +270,7 @@ app.add_typer(style_app, name="style")
 def style_set(
     file: Optional[Path] = typer.Option(None, "--file", "-f", help="Path to a text file containing your style prompt"),
     name: str = typer.Option("Default", "--name", "-n", help="Name for this style profile"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Band this style belongs to"),
     stdin: bool = typer.Option(False, "--stdin", help="Read style prompt from standard input"),
 ):
     """Save a new Style Profile from a file or stdin.
@@ -278,6 +279,7 @@ def style_set(
     discovery, scoring, and high-quality pitch generation.
     """
     repo = StyleProfileRepository()
+    band_repo = BandRepository()
 
     if file:
         if not file.exists():
@@ -295,13 +297,21 @@ def style_set(
         console.print("[red]Style prompt cannot be empty.[/]")
         raise typer.Exit(1)
 
-    profile = StyleProfile(raw_prompt=raw_prompt, name=name)
+    # If no band provided, try to use default band
+    if band_id is None:
+        default_band = band_repo.get_default()
+        if default_band:
+            band_id = default_band.id
+            console.print(f"[dim]Using default band: {default_band.name} (ID {band_id})[/]")
+
+    profile = StyleProfile(raw_prompt=raw_prompt, name=name, band_id=band_id)
     db_profile = repo.create(profile)
 
     console.print(
         Panel.fit(
             f"[green]✓[/] Style Profile saved (ID: {db_profile.id})\n"
             f"Name: {db_profile.name}\n"
+            f"Band ID: {db_profile.band_id or 'None (global)'}\n"
             f"Length: {len(raw_prompt)} characters",
             title="Style Profile Created",
             border_style="green",
@@ -312,6 +322,7 @@ def style_set(
 @style_app.command("show")
 def style_show(
     profile_id: Optional[int] = typer.Argument(None, help="Style Profile ID (shows latest if omitted)"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Show latest for this band"),
 ):
     """Display a saved Style Profile."""
     repo = StyleProfileRepository()
@@ -319,19 +330,22 @@ def style_show(
     if profile_id:
         profile = repo.get_by_id(profile_id)
     else:
-        profile = repo.get_latest()
+        profile = repo.get_latest(band_id=band_id)
 
     if not profile:
         console.print("[yellow]No Style Profiles found. Use [bold]dkplaylister style set[/] first.[/]")
         raise typer.Exit(1)
 
-    console.print(Panel(f"[bold]ID:[/] {profile.id}\n"
-                        f"[bold]Name:[/] {profile.name}\n"
-                        f"[bold]Version:[/] {profile.version}\n"
-                        f"[bold]Updated:[/] {profile.updated_at.strftime('%Y-%m-%d %H:%M')}\n\n"
-                        f"{profile.raw_prompt}",
-                        title=f"Style Profile #{profile.id}",
-                        border_style="cyan"))
+    console.print(Panel(
+        f"[bold]ID:[/] {profile.id}\n"
+        f"[bold]Band ID:[/] {profile.band_id or '— (global)'}\n"
+        f"[bold]Name:[/] {profile.name}\n"
+        f"[bold]Version:[/] {profile.version}\n"
+        f"[bold]Updated:[/] {profile.updated_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"{profile.raw_prompt}",
+        title=f"Style Profile #{profile.id}",
+        border_style="cyan"
+    ))
 
 
 @style_app.command("list")
@@ -494,6 +508,19 @@ def band_show(band_id: int = typer.Argument(..., help="Band ID")):
         title=f"Band #{band.id}",
         border_style="cyan",
     ))
+
+
+@band_app.command("set-default")
+def band_set_default(band_id: int = typer.Argument(..., help="Band ID to set as default")):
+    """Set a band as the default for commands that don't specify --band."""
+    repo = BandRepository()
+    success = repo.set_default(band_id)
+
+    if success:
+        console.print(f"[green]✓[/] Band {band_id} is now the default.")
+    else:
+        console.print(f"[red]Band {band_id} not found.[/]")
+        raise typer.Exit(1)
 
 
 # =============================================================================
@@ -917,10 +944,12 @@ I’m coming home"""
 
 @app.command()
 def pitch(
-    song_title: str = typer.Option(TEST_SONG_TITLE, "--song", "-s", help="Song title"),
+    song_title: str = typer.Option(None, "--song", "-s", help="Song title (or use --song-id)"),
+    song_id: Optional[int] = typer.Option(None, "--song-id", help="Use a saved Song by ID"),
     style_id: Optional[int] = typer.Option(None, "--style-id", help="Use a specific saved Style Profile by ID"),
     style_file: Optional[str] = typer.Option(None, "--style-file", help="Path to a style prompt file (overrides saved profiles)"),
     use_latest: bool = typer.Option(True, "--latest/--no-latest", help="Use the most recently saved Style Profile (default)"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Band context (for future multi-band support)"),
     playlist_url: str = typer.Option(
         "https://open.spotify.com/playlist/57Oh6iT1OjceyZVrE95Cv6",
         "--playlist", "-p",
@@ -949,6 +978,7 @@ def pitch(
         raise typer.Exit(1)
 
     repo = StyleProfileRepository()
+    song_repo = SongRepository()
 
     # Determine which style to use (priority: explicit file > style_id > latest saved > built-in test data)
     if style_file and Path(style_file).exists():
@@ -962,7 +992,7 @@ def pitch(
             raise typer.Exit(1)
         console.print(f"[dim]Using saved Style Profile #{style_id} ({style_profile.name})[/]")
     elif use_latest:
-        style_profile = repo.get_latest()
+        style_profile = repo.get_latest(band_id=band_id)
         if style_profile:
             console.print(f"[dim]Using latest saved Style Profile #{style_profile.id} ({style_profile.name})[/]")
         else:
@@ -972,6 +1002,19 @@ def pitch(
     if not style_profile:
         style_profile = StyleProfile(raw_prompt=TEST_STYLE_PROMPT.strip(), name="Built-in Test Style (Atmospheric Cinematic)")
         console.print("[yellow]No saved Style Profiles found. Using built-in test style.[/]")
+
+    # Handle song
+    song_lyrics = TEST_LYRICS
+    final_song_title = song_title or TEST_SONG_TITLE
+
+    if song_id:
+        song = song_repo.get_by_id(song_id)
+        if not song:
+            console.print(f"[red]Song ID {song_id} not found.[/]")
+            raise typer.Exit(1)
+        final_song_title = song.title
+        song_lyrics = song.lyrics
+        console.print(f"[dim]Using saved Song #{song_id}: {song.title}[/]")
 
     # Minimal playlist object for context
     target_playlist = Playlist(
@@ -989,8 +1032,8 @@ def pitch(
         provider = get_provider("grok", model=model)
         generated = provider.generate_pitch(
             style_profile=style_profile,
-            song_title=song_title,
-            lyrics=TEST_LYRICS,
+            song_title=final_song_title,
+            lyrics=song_lyrics,
             playlist=target_playlist,
             pitch_format=format,
         )
@@ -1000,11 +1043,11 @@ def pitch(
 
     # Display
     console.print("\n" + "=" * 60)
-    console.print(Panel(Markdown(generated), title=f"Generated Pitch — {song_title}", border_style="green"))
+    console.print(Panel(Markdown(generated), title=f"Generated Pitch — {final_song_title}", border_style="green"))
     console.print("=" * 60 + "\n")
 
     if save:
-        out_path = Path(f"pitch_{song_title.lower().replace(' ', '_')}.txt")
+        out_path = Path(f"pitch_{final_song_title.lower().replace(' ', '_')}.txt")
         out_path.write_text(generated)
         console.print(f"[green]Saved to[/] {out_path}")
 

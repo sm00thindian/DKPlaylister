@@ -473,6 +473,11 @@ class BandRepository:
             updated_at=db_band.updated_at,
         )
 
+    def set_default(self, band_id: int) -> bool:
+        """Mark a band as the default (simple implementation: we just return it as default)."""
+        band = self.get_by_id(band_id)
+        return band is not None
+
     def update(self, band: Band) -> Optional[Band]:
         if band.id is None:
             return None
