@@ -404,15 +404,20 @@ elif mode == "Manage Catalog":
     # --- Songs Tab ---
     with tab3:
         st.subheader("Songs / Lyrics")
+
+        # Fetch albums for this band so we can link songs to them
+        band_albums = album_repo.list_by_band(current_band_id)
+        album_lookup = {a.id: a.title for a in band_albums}
+
         songs = song_repo.list_by_band(current_band_id)
 
         if songs:
             for s in songs:
-                with st.expander(f"{s.title} (ID {s.id})"):
+                album_name = album_lookup.get(s.album_id, "No Album") if s.album_id else "No Album"
+                with st.expander(f"{s.title} ({album_name}) - ID {s.id}"):
                     st.text_area("Lyrics", value=s.lyrics, height=200, disabled=True, key=f"cat_song_{s.id}")
                     st.write(f"**Notes:** {s.notes or '—'}")
-                    if s.album_id:
-                        st.caption(f"Album ID: {s.album_id}")
+                    st.caption(f"Album: {album_name}")
         else:
             st.info("No songs yet for this band.")
 
@@ -428,11 +433,22 @@ elif mode == "Manage Catalog":
             song_title = st.text_input("Song Title")
             song_lyrics = st.text_area("Lyrics", height=250)
             song_notes = st.text_area("Notes")
+
+            # Album selection
+            album_options = ["No Album"] + [f"{a.title} (ID {a.id})" for a in band_albums]
+            selected_album_label = st.selectbox("Album (optional)", album_options, key="song_album_select")
+
             submitted = st.form_submit_button("Save Song")
 
             if submitted and song_title and song_lyrics:
+                chosen_album_id = None
+                if selected_album_label != "No Album":
+                    # Extract ID from the label
+                    chosen_album_id = int(selected_album_label.split("(ID ")[1].split(")")[0])
+
                 new_song = Song(
                     band_id=current_band_id,
+                    album_id=chosen_album_id,
                     title=song_title,
                     lyrics=song_lyrics,
                     notes=song_notes or None
