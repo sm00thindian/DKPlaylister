@@ -405,7 +405,7 @@ elif mode == "Manage Catalog":
                 with st.expander(f"{a.title} ({a.release_date or 'No date'}) - ID {a.id}"):
                     st.write(f"**Notes:** {a.notes or '—'}")
 
-                    edit_key = f"edit_album_{a.id}"
+                    edit_key = f"album_edit_checkbox_{a.id}"
                     if st.checkbox("Edit this album", key=edit_key):
                         with st.form(f"edit_album_form_{a.id}"):
                             edited_title = st.text_input("Album Title", value=a.title)
@@ -496,7 +496,7 @@ elif mode == "Manage Catalog":
                                 "Album", 
                                 album_opts, 
                                 index=album_opts.index(current_album_label) if current_album_label in album_opts else 0,
-                                key=f"edit_album_{s.id}"
+                                key=f"song_edit_album_select_{s.id}"
                             )
 
                             col1, col2 = st.columns(2)
