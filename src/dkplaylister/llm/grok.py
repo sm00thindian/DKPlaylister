@@ -132,6 +132,8 @@ Similar Artists: {', '.join(style_profile.similar_artists) or 'Not specified'}""
 
 Rate how well this playlist matches the artist's specific musical style on a scale from 0.0 to 1.0.
 
+**Important (Feb 2026 API changes):** Do NOT rely on removed fields such as popularity, available_markets, or artist followers. Base your judgment only on name, description, genres/tags, and follower count.
+
 Artist Style Profile:
 {style_profile.raw_prompt}
 

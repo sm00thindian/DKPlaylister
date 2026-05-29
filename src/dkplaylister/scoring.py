@@ -2,6 +2,12 @@
 
 Implements the configurable prioritization logic documented in docs/prioritization.md.
 
+Aligned with February 2026 Spotify Web API changes:
+- Does not depend on removed fields (popularity, available_markets, artist followers, etc.).
+- LLM prompts in grok.py are instructed to ignore deprecated data.
+- Rate limiting is handled at the Spotify client layer (see spotify.py).
+"""
+
 Core idea:
 - We want high-value playlists for *this specific artist*, not just big numbers.
 - Primary signals: Activity + Fit
@@ -152,7 +158,13 @@ class PlaylistScorer:
             return max(0.25, base)
 
     def _score_fit(self, playlist: Playlist) -> float:
-        """Semantic + keyword fit between style and playlist."""
+        """
+        Semantic + keyword fit between style and playlist.
+
+        Note (Feb 2026): We deliberately avoid removed fields like popularity,
+        available_markets, and artist followers. We only use name, description,
+        genres/tags, and follower count.
+        """
         # Try LLM first (best signal)
         try:
             llm_score = self.llm.score_playlist_fit(self.style, playlist)

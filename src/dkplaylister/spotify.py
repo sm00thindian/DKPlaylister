@@ -1,9 +1,16 @@
-"""Spotify Web API integration for playlist discovery and enrichment."""
+"""Spotify Web API integration for playlist discovery and enrichment.
+
+Aligned with February 2026 Web API changes:
+- Avoids all removed "Get Several X" and deprecated endpoints.
+- Uses current supported endpoints only (e.g. GET /playlists/{id}).
+- Prepared for stricter search limits (max limit=10).
+"""
 
 from __future__ import annotations
 
 import os
 import re
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -14,8 +21,28 @@ from dkplaylister.models import Curator, Platform, Playlist, PlaylistSource
 
 
 def get_client() -> spotipy.Spotify:
-    """Return an authenticated Spotify client (Client Credentials flow for public data)."""
+    """
+    Return an authenticated Spotify client (Client Credentials flow for public data).
+
+    Note: We handle 429 rate limits manually in our wrapper functions.
+    """
     return spotipy.Spotify(auth_manager=SpotifyClientCredentials())
+
+
+def _handle_rate_limit(func, *args, **kwargs):
+    """Simple retry wrapper that respects Spotify's Retry-After header on 429."""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except spotipy.SpotifyException as e:
+            if e.http_status == 429:
+                retry_after = int(e.headers.get("Retry-After", 5))
+                print(f"Rate limited by Spotify. Waiting {retry_after}s (attempt {attempt + 1}/{max_retries})...")
+                time.sleep(retry_after)
+            else:
+                raise
+    raise RuntimeError("Max retries exceeded due to rate limiting")
 
 
 def get_oauth_client(scope: str = None) -> spotipy.Spotify:
@@ -79,7 +106,8 @@ def fetch_playlist(spotify_url_or_id: str) -> Optional[Playlist]:
 
     try:
         # Using fields parameter to request only what we need (good practice)
-        sp_playlist = client.playlist(
+        sp_playlist = _handle_rate_limit(
+            client.playlist,
             playlist_id,
             fields="id,name,description,followers.total,owner,external_urls.spotify,tracks.total"
         )
