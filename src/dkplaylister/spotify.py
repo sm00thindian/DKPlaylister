@@ -69,6 +69,7 @@ def fetch_playlist(spotify_url_or_id: str) -> Optional[Playlist]:
     Fetch rich data for a single Spotify playlist and return a Playlist model.
 
     This is the core enrichment function for the semi-automatic mining flow.
+    Uses the current supported endpoint (GET /playlists/{id}).
     """
     playlist_id = parse_spotify_playlist_id(spotify_url_or_id)
     if not playlist_id:
@@ -77,7 +78,14 @@ def fetch_playlist(spotify_url_or_id: str) -> Optional[Playlist]:
     client = get_client()
 
     try:
-        sp_playlist = client.playlist(playlist_id, fields="id,name,description,followers.total,owner,external_urls.spotify,tracks.total")
+        # Using fields parameter to request only what we need (good practice)
+        sp_playlist = client.playlist(
+            playlist_id,
+            fields="id,name,description,followers.total,owner,external_urls.spotify,tracks.total"
+        )
+    except spotipy.SpotifyException as e:
+        print(f"Spotify API error fetching playlist {playlist_id}: {e}")
+        return None
     except Exception as e:
         print(f"Failed to fetch playlist {playlist_id}: {e}")
         return None
@@ -100,7 +108,6 @@ def fetch_playlist(spotify_url_or_id: str) -> Optional[Playlist]:
         curator = Curator(
             name=owner.get("display_name"),
         )
-        # We can try to get more curator info later
         playlist.curator = curator
 
     return playlist
