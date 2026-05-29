@@ -60,15 +60,12 @@ llm = get_llm()
 st.sidebar.title("DKPlaylister")
 st.sidebar.markdown("Local tool for high-signal playlist pitching")
 
+# Use a single session state key for the radio so setting it programmatically works reliably
 mode = st.sidebar.radio(
     "Mode",
     ["Review Targets", "Generate Pitch", "Manage Style"],
-    index=["Review Targets", "Generate Pitch", "Manage Style"].index(st.session_state.get("mode", "Review Targets")),
-    key="mode_selector",
+    key="mode",
 )
-
-# Keep session state in sync with the radio
-st.session_state.mode = mode
 
 st.sidebar.divider()
 
@@ -139,20 +136,25 @@ elif mode == "Generate Pitch":
 
     target_options = {f"{t.name} (Score: {t.current_score.total_value_score:.0f})": t for t in targets}
 
-    # Pre-select if coming from "Use for Pitch" button
-    default_index = 0
+    # Pre-select target if user clicked "Use for Pitch" from the list
+    selected_target = None
     if st.session_state.selected_target:
-        for i, t in enumerate(targets):
+        # Try to find the exact target by ID (more reliable than index)
+        for t in targets:
             if t.id == st.session_state.selected_target.id:
-                default_index = i
+                selected_target = t
                 break
-
-    selected_label = st.selectbox("Target Playlist", list(target_options.keys()), index=default_index)
-    selected_target = target_options[selected_label]
-
-    # Clear the pre-selection after use
-    if st.session_state.selected_target:
+        # Clear it so it doesn't keep forcing on future reruns
         st.session_state.selected_target = None
+
+    if selected_target is None:
+        selected_label = st.selectbox("Target Playlist", list(target_options.keys()))
+        selected_target = target_options[selected_label]
+    else:
+        # Force the pre-selected one
+        selected_label = f"{selected_target.name} (Score: {selected_target.current_score.total_value_score:.0f})"
+        st.info(f"**Pre-selected from your targets list:** {selected_target.name}")
+        selected_target = target_options.get(selected_label, selected_target)
 
     # Show target context
     with st.expander("Target details", expanded=False):
