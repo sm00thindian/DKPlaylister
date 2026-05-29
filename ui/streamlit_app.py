@@ -344,7 +344,13 @@ elif mode == "Manage Catalog":
             st.info("No styles yet for this band.")
 
         st.markdown("**Add New Style**")
-        with st.form("add_style_form"):
+
+        if "style_form_counter" not in st.session_state:
+            st.session_state.style_form_counter = 0
+
+        style_form_key = f"add_style_form_{st.session_state.style_form_counter}"
+
+        with st.form(style_form_key):
             new_style_name = st.text_input("Style Name")
             new_style_prompt = st.text_area("Full Style Description (raw prompt)", height=200)
             submitted = st.form_submit_button("Save Style")
@@ -356,6 +362,7 @@ elif mode == "Manage Catalog":
                 )
                 db_s = style_repo.create(new_style)
                 st.success(f"Style '{new_style_name}' created (ID {db_s.id})")
+                st.session_state.style_form_counter += 1
                 st.rerun()
 
     # --- Albums Tab ---
@@ -371,7 +378,13 @@ elif mode == "Manage Catalog":
             st.info("No albums yet.")
 
         st.markdown("**Add New Album**")
-        with st.form("add_album_form"):
+
+        if "album_form_counter" not in st.session_state:
+            st.session_state.album_form_counter = 0
+
+        album_form_key = f"add_album_form_{st.session_state.album_form_counter}"
+
+        with st.form(album_form_key):
             album_title = st.text_input("Album Title")
             album_date = st.text_input("Release Date (YYYY-MM-DD)", placeholder="2025-06-01")
             album_notes = st.text_area("Notes")
@@ -385,6 +398,7 @@ elif mode == "Manage Catalog":
                 )
                 db_a = album_repo.create(new_album)
                 st.success(f"Album created (ID {db_a.id})")
+                st.session_state.album_form_counter += 1
                 st.rerun()
 
     # --- Songs Tab ---
@@ -403,11 +417,19 @@ elif mode == "Manage Catalog":
             st.info("No songs yet for this band.")
 
         st.markdown("**Add New Song**")
-        with st.form("add_song_form"):
+
+        # Use a counter so the form gets a fresh key after submission → fields clear
+        if "song_form_counter" not in st.session_state:
+            st.session_state.song_form_counter = 0
+
+        form_key = f"add_song_form_{st.session_state.song_form_counter}"
+
+        with st.form(form_key):
             song_title = st.text_input("Song Title")
             song_lyrics = st.text_area("Lyrics", height=250)
             song_notes = st.text_area("Notes")
             submitted = st.form_submit_button("Save Song")
+
             if submitted and song_title and song_lyrics:
                 new_song = Song(
                     band_id=current_band_id,
@@ -417,6 +439,9 @@ elif mode == "Manage Catalog":
                 )
                 db_s = song_repo.create(new_song)
                 st.success(f"Song '{song_title}' added (ID {db_s.id})")
+
+                # Increment counter so next time the form renders with clean fields
+                st.session_state.song_form_counter += 1
                 st.rerun()
 
     # --- Bands Tab (global) ---
