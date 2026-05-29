@@ -60,6 +60,7 @@ def get_llm():
 playlist_repo, style_repo = get_repos()
 band_repo = BandRepository()
 song_repo = SongRepository()
+album_repo = AlbumRepository()
 llm = get_llm()
 
 # Initialize band selection
@@ -102,7 +103,7 @@ st.sidebar.divider()
 if "desired_mode" not in st.session_state:
     st.session_state.desired_mode = "Review Targets"
 
-mode_options = ["Review Targets", "Generate Pitch", "Manage Style"]
+mode_options = ["Review Targets", "Generate Pitch", "Manage Catalog"]
 current_index = mode_options.index(st.session_state.desired_mode)
 
 mode = st.sidebar.radio(
@@ -282,38 +283,131 @@ elif mode == "Generate Pitch":
                 use_container_width=True,
             )
 
-elif mode == "Manage Style":
-    st.header("Style Profiles")
+elif mode == "Manage Catalog":
+    st.header("Band Catalog Management")
 
     if not current_band_id:
-        st.warning("Please select or create a band first.")
+        st.warning("Please select or create a band in the sidebar first.")
         st.stop()
 
-    styles = style_repo.list_all(band_id=current_band_id)
+    current_band = band_repo.get_by_id(current_band_id)
+    st.subheader(f"Managing: {current_band.name}")
 
-    if styles:
-        st.subheader(f"Styles for current band (ID {current_band_id})")
-        for s in styles:
-            with st.expander(f"{s.name} (ID {s.id})"):
-                st.text_area("Raw Prompt", value=s.raw_prompt, height=200, disabled=True, key=f"style_{s.id}")
-    else:
-        st.info("No styles for this band yet.")
+    tab1, tab2, tab3, tab4 = st.tabs(["Styles", "Albums", "Songs", "Bands"])
 
-    st.subheader("Add New Style")
-    uploaded = st.file_uploader("Upload a text file with your style description", type=["txt", "md"], key="style_upload")
-    new_name = st.text_input("Style Name", value="New Style", key="new_style_name")
+    # --- Styles Tab ---
+    with tab1:
+        st.subheader("Styles")
+        styles = style_repo.list_all(band_id=current_band_id)
 
-    if st.button("Save New Style", key="save_new_style") and uploaded:
-        content = uploaded.read().decode("utf-8").strip()
-        if content:
-            new_style = StyleProfile(
-                band_id=current_band_id,
-                raw_prompt=content,
-                name=new_name
-            )
-            db_profile = style_repo.create(new_style)
-            st.success(f"Saved new Style (ID: {db_profile.id})")
-            st.rerun()
+        if styles:
+            for s in styles:
+                with st.expander(f"{s.name} (ID {s.id})"):
+                    st.text_area("Raw Prompt", value=s.raw_prompt, height=180, disabled=True, key=f"cat_style_{s.id}")
+        else:
+            st.info("No styles yet for this band.")
+
+        st.markdown("**Add New Style**")
+        with st.form("add_style_form"):
+            new_style_name = st.text_input("Style Name")
+            new_style_prompt = st.text_area("Full Style Description (raw prompt)", height=200)
+            submitted = st.form_submit_button("Save Style")
+            if submitted and new_style_name and new_style_prompt:
+                new_style = StyleProfile(
+                    band_id=current_band_id,
+                    name=new_style_name,
+                    raw_prompt=new_style_prompt
+                )
+                db_s = style_repo.create(new_style)
+                st.success(f"Style '{new_style_name}' created (ID {db_s.id})")
+                st.rerun()
+
+    # --- Albums Tab ---
+    with tab2:
+        st.subheader("Albums / Releases")
+        albums = album_repo.list_by_band(current_band_id)
+
+        if albums:
+            for a in albums:
+                with st.expander(f"{a.title} ({a.release_date or 'No date'}) - ID {a.id}"):
+                    st.write(f"**Notes:** {a.notes or '—'}")
+        else:
+            st.info("No albums yet.")
+
+        st.markdown("**Add New Album**")
+        with st.form("add_album_form"):
+            album_title = st.text_input("Album Title")
+            album_date = st.text_input("Release Date (YYYY-MM-DD)", placeholder="2025-06-01")
+            album_notes = st.text_area("Notes")
+            submitted = st.form_submit_button("Save Album")
+            if submitted and album_title:
+                new_album = Album(
+                    band_id=current_band_id,
+                    title=album_title,
+                    release_date=album_date or None,
+                    notes=album_notes or None
+                )
+                db_a = album_repo.create(new_album)
+                st.success(f"Album created (ID {db_a.id})")
+                st.rerun()
+
+    # --- Songs Tab ---
+    with tab3:
+        st.subheader("Songs / Lyrics")
+        songs = song_repo.list_by_band(current_band_id)
+
+        if songs:
+            for s in songs:
+                with st.expander(f"{s.title} (ID {s.id})"):
+                    st.text_area("Lyrics", value=s.lyrics, height=200, disabled=True, key=f"cat_song_{s.id}")
+                    st.write(f"**Notes:** {s.notes or '—'}")
+                    if s.album_id:
+                        st.caption(f"Album ID: {s.album_id}")
+        else:
+            st.info("No songs yet for this band.")
+
+        st.markdown("**Add New Song**")
+        with st.form("add_song_form"):
+            song_title = st.text_input("Song Title")
+            song_lyrics = st.text_area("Lyrics", height=250)
+            song_notes = st.text_area("Notes")
+            submitted = st.form_submit_button("Save Song")
+            if submitted and song_title and song_lyrics:
+                new_song = Song(
+                    band_id=current_band_id,
+                    title=song_title,
+                    lyrics=song_lyrics,
+                    notes=song_notes or None
+                )
+                db_s = song_repo.create(new_song)
+                st.success(f"Song '{song_title}' added (ID {db_s.id})")
+                st.rerun()
+
+    # --- Bands Tab (global) ---
+    with tab4:
+        st.subheader("All Bands")
+        all_bands = band_repo.list_all()
+
+        for b in all_bands:
+            with st.expander(f"{b.name} ({b.slug}) - ID {b.id}"):
+                st.write(f"**Notes:** {b.notes or '—'}")
+                if st.button("Set as Current Band", key=f"set_band_{b.id}"):
+                    st.session_state.current_band_id = b.id
+                    st.rerun()
+
+        st.markdown("**Create New Band**")
+        with st.form("create_band_form"):
+            new_band_name = st.text_input("Band Name")
+            new_band_slug = st.text_input("Slug (for folders)", value="")
+            new_band_notes = st.text_area("Notes")
+            submitted = st.form_submit_button("Create Band")
+            if submitted and new_band_name:
+                slug = new_band_slug or new_band_name.lower().replace(" ", "-")
+                new_band = Band(name=new_band_name, slug=slug, notes=new_band_notes or None)
+                db_b = band_repo.create(new_band)
+                st.success(f"Band created (ID {db_b.id})")
+                st.session_state.current_band_id = db_b.id
+                st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Run from CLI for full power: `dkplaylister --help`")

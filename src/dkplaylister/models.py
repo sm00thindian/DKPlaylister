@@ -81,6 +81,7 @@ class Song(BaseModel):
 
     id: Optional[int] = None
     band_id: int
+    album_id: Optional[int] = None   # New: optional link to an album
     title: str
     lyrics: str
     notes: Optional[str] = None
@@ -89,6 +90,21 @@ class Song(BaseModel):
     key: Optional[str] = None
     tempo: Optional[int] = None
     duration_seconds: Optional[int] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+
+
+class Album(BaseModel):
+    """An album / release belonging to a band."""
+
+    id: Optional[int] = None
+    band_id: int
+    title: str
+    release_date: Optional[str] = None   # Store as string (YYYY-MM-DD) for simplicity
+    notes: Optional[str] = None
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

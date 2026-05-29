@@ -165,6 +165,7 @@ class SongDB(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     band_id: Mapped[int]
+    album_id: Mapped[Optional[int]] = mapped_column(default=None)
     title: Mapped[str]
     lyrics: Mapped[str]
     notes: Mapped[Optional[str]] = mapped_column(default=None)
@@ -172,6 +173,21 @@ class SongDB(Base):
     key: Mapped[Optional[str]] = mapped_column(default=None)
     tempo: Mapped[Optional[int]] = mapped_column(default=None)
     duration_seconds: Mapped[Optional[int]] = mapped_column(default=None)
+
+    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
+
+
+class AlbumDB(Base):
+    """Database representation of an Album / Release."""
+
+    __tablename__ = "albums"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    band_id: Mapped[int]
+    title: Mapped[str]
+    release_date: Mapped[Optional[str]] = mapped_column(default=None)
+    notes: Mapped[Optional[str]] = mapped_column(default=None)
 
     created_at: Mapped[datetime] = mapped_column(default=func.now())
     updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
@@ -558,6 +574,7 @@ class SongRepository:
     def create(self, song: Song) -> SongDB:
         db_song = SongDB(
             band_id=song.band_id,
+            album_id=song.album_id,
             title=song.title,
             lyrics=song.lyrics,
             notes=song.notes,
@@ -577,6 +594,7 @@ class SongRepository:
         return Song(
             id=db_obj.id,
             band_id=db_obj.band_id,
+            album_id=db_obj.album_id,
             title=db_obj.title,
             lyrics=db_obj.lyrics,
             notes=db_obj.notes,
@@ -598,6 +616,7 @@ class SongRepository:
             Song(
                 id=s.id,
                 band_id=s.band_id,
+                album_id=s.album_id,
                 title=s.title,
                 lyrics=s.lyrics,
                 notes=s.notes,
@@ -617,6 +636,7 @@ class SongRepository:
         if not db_obj or db_obj.band_id != song.band_id:
             return None
 
+        db_obj.album_id = song.album_id
         db_obj.title = song.title
         db_obj.lyrics = song.lyrics
         db_obj.notes = song.notes
@@ -630,6 +650,86 @@ class SongRepository:
 
     def delete(self, song_id: int) -> bool:
         db_obj = self.session.get(SongDB, song_id)
+        if not db_obj:
+            return False
+        self.session.delete(db_obj)
+        self.session.commit()
+        return True
+
+
+# =============================================================================
+# Album Repository
+# =============================================================================
+
+class AlbumRepository:
+    """Data access for Albums."""
+
+    def __init__(self, session=None):
+        self.session = session or get_session()
+
+    def create(self, album: Album) -> AlbumDB:
+        db_album = AlbumDB(
+            band_id=album.band_id,
+            title=album.title,
+            release_date=album.release_date,
+            notes=album.notes,
+        )
+        self.session.add(db_album)
+        self.session.commit()
+        self.session.refresh(db_album)
+        return db_album
+
+    def get_by_id(self, album_id: int) -> Optional[Album]:
+        db_obj = self.session.get(AlbumDB, album_id)
+        if not db_obj:
+            return None
+        return Album(
+            id=db_obj.id,
+            band_id=db_obj.band_id,
+            title=db_obj.title,
+            release_date=db_obj.release_date,
+            notes=db_obj.notes,
+            created_at=db_obj.created_at,
+            updated_at=db_obj.updated_at,
+        )
+
+    def list_by_band(self, band_id: int) -> list[Album]:
+        db_albums = (
+            self.session.query(AlbumDB)
+            .filter_by(band_id=band_id)
+            .order_by(AlbumDB.release_date.desc().nullslast(), AlbumDB.title)
+            .all()
+        )
+        return [
+            Album(
+                id=a.id,
+                band_id=a.band_id,
+                title=a.title,
+                release_date=a.release_date,
+                notes=a.notes,
+                created_at=a.created_at,
+                updated_at=a.updated_at,
+            )
+            for a in db_albums
+        ]
+
+    def update(self, album: Album) -> Optional[Album]:
+        if album.id is None:
+            return None
+        db_obj = self.session.get(AlbumDB, album.id)
+        if not db_obj or db_obj.band_id != album.band_id:
+            return None
+
+        db_obj.title = album.title
+        db_obj.release_date = album.release_date
+        db_obj.notes = album.notes
+
+        self.session.commit()
+        self.session.refresh(db_obj)
+        return self.get_by_id(db_obj.id)
+
+    def delete(self, album_id: int) -> bool:
+        db_obj = self.session.get(AlbumDB, album_id)
         if not db_obj:
             return False
         self.session.delete(db_obj)
