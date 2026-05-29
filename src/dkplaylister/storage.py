@@ -213,6 +213,9 @@ def get_session(db_path: Optional[Path] = None):
     # Phase 0 migration: safely add band_id to style_profiles if missing
     _migrate_add_band_id_to_styles(engine)
 
+    # Phase 2 migration: safely add album_id to songs if missing
+    _migrate_add_album_id_to_songs(engine)
+
     return sessionmaker(bind=engine)()
 
 
@@ -228,6 +231,19 @@ def _migrate_add_band_id_to_styles(engine):
                 conn.commit()
         except Exception:
             # Column might already exist or table doesn't exist yet — safe to ignore
+            pass
+
+
+def _migrate_add_album_id_to_songs(engine):
+    """Safe migration to add album_id column to songs table."""
+    with engine.connect() as conn:
+        try:
+            result = conn.exec_driver_sql("PRAGMA table_info(songs)")
+            columns = [row[1] for row in result.fetchall()]
+            if "album_id" not in columns:
+                conn.exec_driver_sql("ALTER TABLE songs ADD COLUMN album_id INTEGER")
+                conn.commit()
+        except Exception:
             pass
 
 

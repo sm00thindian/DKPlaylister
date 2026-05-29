@@ -25,6 +25,7 @@ from dkplaylister.storage import (
     StyleProfileRepository,
     BandRepository,
     SongRepository,
+    AlbumRepository,
 )
 from dkplaylister.llm import get_provider
 from dkplaylister.scoring import PlaylistScorer
@@ -75,25 +76,60 @@ st.sidebar.markdown("Local tool for high-signal playlist pitching")
 
 # --- Band Selection ---
 bands = band_repo.list_all()
-if bands:
+
+if not bands:
+    st.sidebar.warning("No bands yet. Create one below to get started.")
+    with st.sidebar.form("create_first_band"):
+        new_name = st.text_input("Band Name")
+        new_slug = st.text_input("Slug (folder name)", value="")
+        if st.form_submit_button("Create Band"):
+            if new_name:
+                slug = new_slug or new_name.lower().replace(" ", "-")
+                try:
+                    new_band = Band(name=new_name, slug=slug)
+                    created = band_repo.create(new_band)
+                    st.session_state.current_band_id = created.id
+                    st.success(f"Band '{new_name}' created!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error creating band: {e}")
+else:
     band_options = {f"{b.name} ({b.slug})": b.id for b in bands}
     current_band_id = st.session_state.current_band_id
 
-    # Find current selection
     current_label = None
     for label, bid in band_options.items():
         if bid == current_band_id:
             current_label = label
             break
 
+    if current_label is None:
+        current_label = list(band_options.keys())[0]
+        st.session_state.current_band_id = band_options[current_label]
+
     selected_label = st.sidebar.selectbox(
         "Current Band",
         list(band_options.keys()),
-        index=list(band_options.keys()).index(current_label) if current_label else 0,
+        index=list(band_options.keys()).index(current_label),
     )
     st.session_state.current_band_id = band_options[selected_label]
-else:
-    st.sidebar.warning("No bands created yet. Use CLI: `dkplaylister band create`")
+
+    # Quick "Create New Band" expander in sidebar
+    with st.sidebar.expander("➕ Create New Band"):
+        with st.form("create_band_sidebar"):
+            new_name = st.text_input("Band Name")
+            new_slug = st.text_input("Slug (for folders)", value="")
+            submitted = st.form_submit_button("Create")
+            if submitted and new_name:
+                slug = new_slug or new_name.lower().replace(" ", "-")
+                try:
+                    new_band = Band(name=new_name, slug=slug)
+                    created = band_repo.create(new_band)
+                    st.session_state.current_band_id = created.id
+                    st.success(f"Created band: {new_name}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
 
 current_band_id = st.session_state.current_band_id
 
