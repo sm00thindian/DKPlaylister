@@ -4,7 +4,8 @@
 
 - Python 3.11+
 - A free Spotify Developer account (https://developer.spotify.com/dashboard)
-- (Optional) uv or pipx for easy installation
+- An xAI API key (for Grok-powered pitch generation and analysis)
+- (Optional but recommended) uv or pipx for easy installation
 
 ## 2. Installation (Development)
 
@@ -25,14 +26,15 @@ pip install -e ".[dev]"
 
 ```bash
 cp .env.example .env
-# Edit .env and add your Spotify Client ID + Secret
+# Edit .env and add:
+# - SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
+# - XAI_API_KEY (required for pitch generation)
 ```
 
 Create a Spotify app:
 1. Go to https://developer.spotify.com/dashboard
-2. Create new app (name it "DKPlaylister" or similar)
-3. Copy Client ID and Client Secret into `.env`
-4. No redirect URI needed for Client Credentials flow (public data only)
+2. Create a new app (name it "DKPlaylister")
+3. Copy the Client ID and Client Secret into `.env`
 
 ## 4. Initialize
 
@@ -40,21 +42,27 @@ Create a Spotify app:
 dkplaylister init
 ```
 
-## 5. First Search (once implemented)
+## 5. Current Focus (Early Development)
 
-```bash
-dkplaylister search --genre lofi --keywords submissions,accepting --min-followers 2000
-```
+The project is currently focused on:
 
-## Next Milestones
+- Defining and storing your **Style Prompt** (the detailed description of your music)
+- Building the pluggable Grok-powered pitch generation system
+- Creating the configurable scoring/prioritization engine
 
-See the main [README](../README.md) for the full roadmap.
+See the main [README](../README.md) for the current vision and roadmap.
+
+## Next Steps (Planned)
+
+- `dkplaylister style set` — Load your detailed music description
+- `dkplaylister mine` — Semi-automatic target discovery (Playlister + Spotify)
+- `dkplaylister pitch` — Generate optimized submissions from your lyrics
 
 ## Tips for Effective Use
 
-- Start narrow: specific genres + "submissions" or "pitch" in keywords.
-- Always verify contacts manually before blasting emails.
-- Personalize every pitch with 1-2 sentences about why your track fits *that* playlist.
-- Track everything — the database is your memory.
+- Your Style Prompt is the foundation. The more specific and vivid, the better the results.
+- Playlister.com is treated as a powerful **discovery aid**, not the final source of truth. You control the searches.
+- Always review and personalize LLM-generated pitches before sending.
+- Track everything — your historical response data will become one of the highest-weighted signals over time.
 
 Happy pitching! 🎵

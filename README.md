@@ -1,99 +1,169 @@
 # DKPlaylister
 
-> Find the right playlists. Pitch your music. Get heard.
+> Mine high-value playlists. Generate powerful pitches. Get your music heard by real listeners.
 
-**DKPlaylister** is a personal toolkit for independent musicians to discover playlist submission opportunities, manage outreach campaigns, and track results across platforms.
+**DKPlaylister** is a personal, Grok-powered toolkit that helps independent musicians **systematically discover high-value playlist targets** and generate **optimized, personalized submission pitches** — all driven from a rich description of your music and your actual song lyrics.
 
-## Why DKPlaylister?
+## The Core Idea
 
-As an artist, finding legitimate playlists that actually accept submissions (and respond) is time-consuming and scattered across Spotify, Instagram, Reddit, curator websites, and more. Paid services are expensive. Existing open-source tools are limited to one platform or lack workflow features.
+Most playlist tools focus on volume. DKPlaylister focuses on **signal**.
 
-DKPlaylister aims to be the **end-to-end open-source solution** for ethical, efficient music promotion via playlists.
+You describe your music once in detail (your "Style Prompt"). The system expands that into primary and related genres, helps you mine strong targets (with heavy emphasis on real listeners and active curators rather than raw follower counts), and then turns your **Song Title + Lyrics** into high-quality, context-aware pitches tailored to specific playlists and curators.
 
-## Key Features (Roadmap)
+The goal is fewer, better pitches that actually have a chance of landing with the right people.
 
-### Phase 1: Discovery
-- **Spotify Integration** — Search public playlists using the official Web API. Filter by genre, mood, follower count, keywords ("submissions", "accepting", "demos", "pitch me").
-- **Curator Extraction** — Automatically pull emails, Instagram, Twitter/X, TikTok, websites, and submission guidelines from playlist descriptions and curator profiles.
-- **Multi-Platform Support** — Extend beyond Spotify to YouTube Music, SoundCloud, and user-curated lists.
-- **Smart Matching** — Score playlists for fit based on your genre, BPM, mood, and release type.
+## Operating Modes
 
-### Phase 2: Outreach Workflow
-- Local database (SQLite) to store playlists, contacts, and submission history.
-- Submission tracker: status (Sent, Opened, Accepted, Rejected, No Response), dates, notes, follow-ups.
-- Personalized pitch generator (template + optional LLM assistance for customization).
-- Bulk export to CSV/Excel for campaigns or import into email tools.
-- Respect for curator preferences (opt-out lists, "no unsolicited" flags).
+DKPlaylister is designed to be **semi-automatic by default** — you stay in control, especially when using rate-limited sources like Playlister.com.
 
-### Phase 3: Analytics & Automation
-- Stats: response rates by genre/playlist size, best times to pitch, curator tiers.
-- Duplicate & spam detection.
-- Optional: integration with Spotify for Artists pitching (editorial playlists).
-- Email/SM automation helpers (respecting rate limits and laws like CAN-SPAM/GDPR).
+| Mode              | Description                                                                 | Best For |
+|-------------------|-----------------------------------------------------------------------------|----------|
+| **Semi-automatic** (default) | You drive discovery (especially Playlister searches). The tool ingests results, enriches them, scores, ranks, and generates pitches. | Most users — best balance of power and control |
+| **Interactive**       | Guided, step-by-step workflow with more prompts and confirmations          | Learning the system or careful campaigns |
+| **Automatic**         | More hands-off mining and pitching (with strong rate limits and safeguards) | Advanced users with clear rules |
+
+You can configure the default mode and safety rails in your settings.
+
+## How We Prioritize Playlists
+
+We deliberately **do not** optimize purely for the biggest numbers.
+
+**Core Philosophy**: Maximize real human listener exposure from curators who are likely to actually listen, add, and keep your music.
+
+### Default Scoring Factors (all configurable)
+
+- **Activity & Freshness** (Very High weight) — Has the playlist added music recently? Is the curator still active? This is one of the strongest signals of a living, breathing playlist.
+- **Genre + Vibe Fit** (Very High weight) — How well does the playlist match your detailed Style Prompt (semantic + keyword alignment).
+- **Submission Openness** (High weight) — Explicit signals that the curator accepts music ("submissions open", "accepting demos", contact info shared publicly, etc.). Playlister results receive a natural boost here.
+- **Follower Count** (Medium weight, log-scaled) — Important, but with strong diminishing returns. A well-curated 12k playlist often beats a neglected 150k one.
+- **Contact Quality** (Medium-High) — Real email > active Instagram > tracked bit.ly > none.
+- **Your Historical Performance** (High, improves over time) — Has this curator or similar playlists responded to you before?
+- **Risk Penalties** (Strong negative) — Signs of botted playlists, pay-to-play language, suspiciously low engagement relative to size, or curators you've previously flagged.
+
+The system should be able to clearly explain *why* one playlist ranks higher than another for *your* music.
+
+All weights and thresholds are configurable so you can tune the system as you learn what actually works.
+
+## LLM Strategy (Grok First)
+
+**Grok (xAI)** is the primary and default language model for:
+- Expanding and interpreting your Style Prompt
+- Scoring playlist fit
+- Generating personalized, high-quality submission pitches from your actual lyrics
+
+The system is built from day one with a clean, pluggable LLM provider interface. Adding OpenAI, Anthropic, Groq, or local models (Ollama, etc.) later will be straightforward.
+
+## The Role of Playlister.com
+
+If you have DistroKid Ultimate access, Playlister.com is an extremely useful **discovery source** within the semi-automatic workflow:
+
+- Its multi-pass searchbot often surfaces better "submission-friendly" Spotify playlists than basic API searches.
+- It surfaces real Spotify playlist URLs + contact signals.
+- You run the searches (respecting the daily limits), then feed the results into DKPlaylister for enrichment, scoring, deduplication, and pitch generation.
+
+DKPlaylister treats Playlister as one powerful input among others (Spotify direct search, manual lists, future sources), not the only source.
+
+## Updated Roadmap
+
+### Phase 0: Foundation (Current)
+- Solid local database + provenance tracking (where every target came from)
+- StyleProfile as the central concept
+- Configurable prioritization and scoring engine
+- Pluggable Grok-first LLM layer
+
+### Phase 1: Discovery & Mining (Next)
+- Strong Playlister + Spotify hybrid ingestion
+- Style Prompt → genre expansion → target mining
+- Smart ranking with explainable scores
+- Manual + assisted import workflows
+
+### Phase 2: Pitch Generation (High Priority)
+- High-quality pitch generation from Song Title + Lyrics + Style + Target Playlist
+- Multiple output formats (email, Instagram DM, submission form)
+- Iteration and refinement of pitches
+
+### Phase 3: Workflow & Intelligence
+- Full submission tracking and learning loop
+- Campaign management
+- "What worked" analytics
+- Optional automation with strict safeguards
 
 ## Ethical & Legal Notes
 
-- Uses **official APIs only** where possible (Spotify Web API). No scraping of private data.
-- Designed for **personalized, respectful outreach** — not spam or bulk automation.
-- You are responsible for complying with all applicable laws and each curator's stated guidelines.
-- Always personalize your pitches. Generic mass emails hurt everyone.
+- This tool is built for **respectful, personalized outreach** — not volume spam.
+- Always respect platform limits (especially Playlister's daily caps) and each curator's stated preferences.
+- LLM-generated pitches are starting points. **You are responsible for reviewing and personalizing** every message you send.
+- We strongly penalize (in scoring) known bot farms and pay-to-play schemes.
+- You are responsible for complying with all applicable laws (CAN-SPAM, GDPR, etc.).
 
-## Quick Start (Planned)
+Generic mass pitches hurt everyone. The entire point of this system is to help you do the opposite.
+
+## Quick Start (Current State)
 
 ```bash
-# After cloning
-uv sync  # or pip install -e ".[dev]"
+# Clone and install
+git clone https://github.com/sm00thindian/DKPlaylister.git
+cd DKPlaylister
+uv sync   # or pip install -e ".[dev]"
 
-# Setup Spotify credentials (free at developer.spotify.com)
+# Setup environment
 cp .env.example .env
-# edit .env with your SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET
+# Add your SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
+# Add your XAI_API_KEY for Grok pitch generation
 
-dkplaylister auth spotify
-dkplaylister search --genre "lofi" --keywords "submissions" --min-followers 5000
-dkplaylister export --format excel
+dkplaylister init
 ```
 
-See [docs/getting-started.md](docs/getting-started.md) once available.
+Future commands (in active development):
 
-## Installation (Future)
+```bash
+# Define or load your style
+dkplaylister style set --file my-style.txt
 
-Will support:
+# Mine targets (semi-automatic flow)
+dkplaylister mine --style "atmospheric cinematic indie..." --min-followers 8000
 
-- `uv tool install dkplaylister`
-- `pipx install dkplaylister`
-- Docker for advanced use
+# Generate a pitch for a specific song + target
+dkplaylister pitch --song "If I Get My Say" --playlist <id-or-url>
+```
+
+See the evolving docs in `/docs`.
+
+## Example Style Prompt (Real Test Data)
+
+This is the actual style description currently being used to develop the system:
+
+> Atmospheric cinematic indie rock / indie folk, expansive soundstage with room to breathe, mid-tempo to slow ballad (72-95 BPM), deeply reverb-drenched shimmering jangly atmospheric guitars with delicate fingerpicked arpeggios that build into rich layered tones and tasteful overdriven textures, lush dripping reverb and long ethereal delays on everything, warm pulsing bass, heavy room mics for natural organic depth.
+> Deep resonant baritone male vocals with warm rich low chest voice, raw earnest delivery full of gentle cracks and yearning emotion that can rise into grounded belted passages and lush harmonies...
+
+(Full lyrics for the song *"If I Get My Say"* are also being used during development.)
 
 ## Project Structure
 
 ```
 DKPlaylister/
-├── src/dkplaylister/     # Main package
-│   ├── cli.py            # Typer CLI entrypoint
-│   ├── spotify.py        # Spotify API client + search logic
-│   ├── models.py         # Pydantic models (Playlist, Curator, Submission)
-│   ├── storage.py        # SQLite persistence
-│   └── ...
-├── data/                 # Local data (gitignored)
-├── exports/              # Generated campaign files
-├── tests/
+├── src/dkplaylister/
+│   ├── cli.py
+│   ├── models.py          # StyleProfile, Playlist, Curator, Pitch, etc.
+│   ├── llm/               # Pluggable providers (grok.py first)
+│   ├── scoring.py         # Configurable prioritization engine
+│   ├── spotify.py
+│   ├── playlister.py      # Playlister.com ingestion helpers
+│   └── storage.py
+├── data/
+├── docs/
 ├── pyproject.toml
 └── README.md
 ```
 
 ## Contributing
 
-This started as a personal tool for my own music promotion. Contributions, ideas, and curation lists are welcome!
+This is a personal tool being built in public for real music promotion use. Ideas, feedback, and contributions are welcome — especially around:
 
-- Open issues for feature requests or bugs
-- PRs for new platform integrations or improvements
-- Share your successful playlist lists (ethically)
-
-## Alternatives
-
-- [Playlist Farm](https://github.com/josephvolmer/playlist-farm) — Excellent Spotify-focused CLI/TUI
-- [Spotify Playlist Curator Fetcher](https://github.com/MLK97/Spotify-Playlist-Curator-Fetcher) — GUI version
-- Commercial: Playlist Push, SubmitHub, Groover, etc.
-- Spotify for Artists (editorial playlists)
+- Better prioritization signals
+- Pitch quality and tone
+- Playlister/Spotify ingestion improvements
+- LLM prompt engineering for music pitching
 
 ## License
 
@@ -105,4 +175,4 @@ Kilynn Weber (sm00thindian)
 
 ---
 
-*Built with love for the independent music community. Let's get more great music heard.*
+*Built for artists who want to do this the right way.*
