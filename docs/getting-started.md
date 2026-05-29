@@ -28,13 +28,19 @@ pip install -e ".[dev]"
 cp .env.example .env
 # Edit .env and add:
 # - SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
+# - (Optional but recommended) SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
 # - XAI_API_KEY (required for pitch generation)
 ```
 
 Create a Spotify app:
 1. Go to https://developer.spotify.com/dashboard
-2. Create a new app (name it "DKPlaylister")
-3. Copy the Client ID and Client Secret into `.env`
+2. Create a new app and name it **DKPlaylister**
+3. Under "Redirect URIs", add this one (recommended):
+   `http://127.0.0.1:8888/callback`
+4. Copy the **Client ID** and **Client Secret** into your `.env` file.
+
+> **Note**: You only need the Client Credentials flow right now (for public playlist data).  
+> The redirect URI is required by Spotify and will be used later if we add user-authenticated features.
 
 ## 4. Initialize
 

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Optional
 from urllib.parse import urlparse
 
 import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 
 from dkplaylister.models import Curator, Platform, Playlist, PlaylistSource
 
@@ -15,6 +16,30 @@ from dkplaylister.models import Curator, Platform, Playlist, PlaylistSource
 def get_client() -> spotipy.Spotify:
     """Return an authenticated Spotify client (Client Credentials flow for public data)."""
     return spotipy.Spotify(auth_manager=SpotifyClientCredentials())
+
+
+def get_oauth_client(scope: str = None) -> spotipy.Spotify:
+    """
+    Return a Spotify client using Authorization Code flow (for user-specific actions).
+
+    This is not used yet, but prepared for future features (e.g. accessing user's own data).
+    Requires SPOTIFY_REDIRECT_URI to be set.
+    """
+    client_id = os.getenv("SPOTIFY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+    redirect_uri = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
+
+    if not client_id or not client_secret:
+        raise ValueError("SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set")
+
+    auth_manager = SpotifyOAuth(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        scope=scope,
+        cache_path=os.getenv("SPOTIFY_CACHE_PATH", ".spotify_cache"),
+    )
+    return spotipy.Spotify(auth_manager=auth_manager)
 
 
 def parse_spotify_playlist_id(url_or_id: str) -> Optional[str]:
