@@ -34,6 +34,12 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Initialize session state
+if "mode" not in st.session_state:
+    st.session_state.mode = "Review Targets"
+if "selected_target" not in st.session_state:
+    st.session_state.selected_target = None
+
 # --- Helpers ---
 
 @st.cache_resource
@@ -57,8 +63,12 @@ st.sidebar.markdown("Local tool for high-signal playlist pitching")
 mode = st.sidebar.radio(
     "Mode",
     ["Review Targets", "Generate Pitch", "Manage Style"],
-    index=0,
+    index=["Review Targets", "Generate Pitch", "Manage Style"].index(st.session_state.get("mode", "Review Targets")),
+    key="mode_selector",
 )
+
+# Keep session state in sync with the radio
+st.session_state.mode = mode
 
 st.sidebar.divider()
 
@@ -102,7 +112,8 @@ if mode == "Review Targets":
             with cols[3]:
                 if st.button("Use for Pitch", key=f"use_{t.id}"):
                     st.session_state.selected_target = t
-                    st.switch_page("Generate Pitch")  # This won't work in older streamlit, so we use a flag instead
+                    st.session_state.mode = "Generate Pitch"
+                    st.rerun()
 
             st.divider()
 
@@ -127,8 +138,21 @@ elif mode == "Generate Pitch":
         st.stop()
 
     target_options = {f"{t.name} (Score: {t.current_score.total_value_score:.0f})": t for t in targets}
-    selected_label = st.selectbox("Target Playlist", list(target_options.keys()))
+
+    # Pre-select if coming from "Use for Pitch" button
+    default_index = 0
+    if st.session_state.selected_target:
+        for i, t in enumerate(targets):
+            if t.id == st.session_state.selected_target.id:
+                default_index = i
+                break
+
+    selected_label = st.selectbox("Target Playlist", list(target_options.keys()), index=default_index)
     selected_target = target_options[selected_label]
+
+    # Clear the pre-selection after use
+    if st.session_state.selected_target:
+        st.session_state.selected_target = None
 
     st.subheader("2. Song Details")
     song_title = st.text_input("Song Title", value="If I Get My Say")
