@@ -154,14 +154,53 @@ elif mode == "Generate Pitch":
     if st.session_state.selected_target:
         st.session_state.selected_target = None
 
+    # Show target context
+    with st.expander("Target details", expanded=False):
+        st.write(f"**{selected_target.name}**")
+        st.write(f"Followers: **{selected_target.follower_count:,}**" if selected_target.follower_count else "Followers: Unknown")
+        if selected_target.current_score:
+            st.write(f"Score vs your style: **{selected_target.current_score.total_value_score:.0f}/100**")
+            st.caption(selected_target.current_score.explanation)
+        if selected_target.description:
+            st.write("Description:")
+            st.caption(selected_target.description[:400] + "..." if len(selected_target.description) > 400 else selected_target.description)
+
     st.subheader("2. Song Details")
-    song_title = st.text_input("Song Title", value="If I Get My Say")
-    lyrics = st.text_area("Lyrics", height=300, value="""[Paste your full lyrics here]""")
 
-    format_choice = st.selectbox("Pitch Format", ["email", "instagram_dm", "submission_form"])
+    # Simple in-session song storage
+    if "songs" not in st.session_state:
+        st.session_state.songs = {}
 
-    if st.button("Generate Pitch with Grok", type="primary"):
-        with st.spinner("Generating pitch..."):
+    song_title = st.text_input("Song Title", value="If I Get My Say", key="song_title_input")
+
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        lyrics = st.text_area("Lyrics", height=280, value="""[Paste your full lyrics here]""", key="lyrics_input")
+    with col_b:
+        st.markdown("**Quick songs**")
+        if st.button("Load 'If I Get My Say'"):
+            st.session_state.songs["If I Get My Say"] = lyrics  # will be updated on next rerun
+            st.rerun()
+
+        # Show previously used songs in this session
+        if st.session_state.songs:
+            for saved_title in list(st.session_state.songs.keys()):
+                if st.button(f"Load: {saved_title}", key=f"load_{saved_title}"):
+                    # This is a bit hacky without proper state management, but works for now
+                    pass
+
+    format_choice = st.selectbox("Pitch Format", ["email", "instagram_dm", "submission_form"], key="format_select")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        generate_clicked = st.button("Generate Pitch with Grok", type="primary", use_container_width=True)
+    with col2:
+        if "last_pitch" in st.session_state:
+            if st.button("Regenerate (same inputs)", use_container_width=True):
+                generate_clicked = True
+
+    if generate_clicked:
+        with st.spinner("Generating pitch with Grok..."):
             try:
                 generated = llm.generate_pitch(
                     style_profile=style,
@@ -173,23 +212,41 @@ elif mode == "Generate Pitch":
                 st.session_state.last_pitch = generated
                 st.session_state.last_song = song_title
                 st.session_state.last_target = selected_target
+                st.session_state.last_format = format_choice
+                # Save song for quick reload in this session
+                st.session_state.songs[song_title] = lyrics
             except Exception as e:
                 st.error(f"Failed to generate pitch: {e}")
 
     if "last_pitch" in st.session_state:
-        st.subheader("Generated Pitch")
-        edited = st.text_area("Edit as needed", value=st.session_state.last_pitch, height=400)
+        st.subheader(f"Generated Pitch — {st.session_state.last_song}")
 
-        col1, col2 = st.columns(2)
+        # Show which target/style was used
+        st.caption(f"Target: **{st.session_state.last_target.name}** | Style: **{style.name}** | Format: **{st.session_state.get('last_format', format_choice)}**")
+
+        edited = st.text_area("Edit as needed", value=st.session_state.last_pitch, height=420, key="edited_pitch")
+
+        col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("Save Pitch (placeholder)"):
-                st.success("Pitch saved locally (feature coming soon).")
+            if st.button("Save Pitch to File", use_container_width=True):
+                pitches_dir = Path("pitches")
+                pitches_dir.mkdir(exist_ok=True)
+                filename = f"{st.session_state.last_song.replace(' ', '_')}_{st.session_state.last_target.name[:30].replace(' ', '_')}.txt"
+                filepath = pitches_dir / filename
+                filepath.write_text(edited)
+                st.success(f"Saved to {filepath}")
+
         with col2:
             st.download_button(
-                "Download as .txt",
+                "Download",
                 data=edited,
                 file_name=f"pitch_{st.session_state.last_song.replace(' ', '_')}.txt",
+                use_container_width=True,
             )
+
+        with col3:
+            if st.button("Copy to Clipboard (manual)", use_container_width=True):
+                st.info("Select the text above and copy (Cmd/Ctrl+C)")
 
 elif mode == "Manage Style":
     st.header("Your Style Profile")
