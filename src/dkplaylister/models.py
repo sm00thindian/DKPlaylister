@@ -1,16 +1,36 @@
-"""Core data models for DKPlaylister."""
+"""Core data models for DKPlaylister.
+
+This module defines the central concepts:
+- StyleProfile: Your music's detailed DNA (the foundation)
+- Playlist: Enriched targets with provenance and scoring
+- Pitch: LLM-generated (and human-refined) submissions
+- Supporting workflow models
+"""
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict
 
+
+# =============================================================================
+# Enums
+# =============================================================================
 
 class Platform(str, Enum):
     SPOTIFY = "spotify"
     YOUTUBE = "youtube"
     SOUNDCLOUD = "soundcloud"
+    OTHER = "other"
+
+
+class PlaylistSource(str, Enum):
+    """Where this playlist target was originally discovered."""
+    PLAYLISTER = "playlister"
+    SPOTIFY_DIRECT = "spotify_direct"
+    MANUAL = "manual"
+    IMPORT = "import"
     OTHER = "other"
 
 
@@ -23,6 +43,128 @@ class SubmissionStatus(str, Enum):
     NO_RESPONSE = "no_response"
     OPTED_OUT = "opted_out"
 
+
+class PitchFormat(str, Enum):
+    EMAIL = "email"
+    INSTAGRAM_DM = "instagram_dm"
+    SUBMISSION_FORM = "submission_form"
+    TIKTOK_COMMENT = "tiktok_comment"
+    OTHER = "other"
+
+
+class OperatingMode(str, Enum):
+    SEMI_AUTOMATIC = "semi_automatic"   # Default
+    INTERACTIVE = "interactive"
+    AUTOMATIC = "automatic"
+
+
+# =============================================================================
+# StyleProfile - The heart of the system
+# =============================================================================
+
+class StyleProfile(BaseModel):
+    """Rich, structured description of an artist's music.
+
+    This is the single source of truth that drives genre expansion,
+    fit scoring, and personalized pitch generation.
+    """
+
+    id: Optional[int] = None
+    name: str = "Default"
+    raw_prompt: str = Field(..., description="The full, detailed style description provided by the user")
+    primary_genres: list[str] = Field(default_factory=list)
+    secondary_genres: list[str] = Field(default_factory=list)
+    bpm_range: tuple[int, int] = (60, 110)
+    energy_level: Literal["low", "medium-low", "medium", "medium-high", "high"] = "medium"
+    mood_keywords: list[str] = Field(default_factory=list)
+    sonic_characteristics: list[str] = Field(default_factory=list)  # e.g. "reverb-drenched", "jangly", "cinematic"
+    vocal_style: Optional[str] = None
+    production_notes: Optional[str] = None
+    target_audience: Optional[str] = None
+    similar_artists: list[str] = Field(default_factory=list)
+
+    version: int = 1
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+
+
+# =============================================================================
+# Scoring & Prioritization
+# =============================================================================
+
+class ScoreBreakdown(BaseModel):
+    """Explainable scoring for a playlist against a StyleProfile."""
+
+    activity_score: float = 0.0          # 0-1
+    fit_score: float = 0.0               # 0-1 (semantic + keyword)
+    openness_score: float = 0.0          # 0-1
+    follower_score: float = 0.0          # log-scaled
+    contact_quality_score: float = 0.0
+    risk_penalty: float = 0.0            # negative or zero
+    personal_history_bonus: float = 0.0
+
+    total_value_score: float = 0.0       # Final composite (0-100 or 0-1)
+
+    explanation: Optional[str] = None    # Human-readable reason for the score
+
+
+class Playlist(BaseModel):
+    """A music playlist that may accept submissions.
+
+    Heavily enriched with provenance, scoring, and activity signals.
+    """
+
+    id: Optional[int] = None
+
+    # Core identity
+    platform: Platform
+    external_id: str
+    name: str
+    url: HttpUrl
+    description: Optional[str] = None
+
+    # Provenance
+    source: PlaylistSource = PlaylistSource.SPOTIFY_DIRECT
+    discovery_query: Optional[str] = None          # e.g. Playlister search term
+    discovered_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Curator
+    curator: Optional["Curator"] = None
+
+    # Metrics
+    follower_count: Optional[int] = None
+    track_count: Optional[int] = None
+    last_activity_at: Optional[datetime] = None    # When it last added a track (best effort)
+
+    # Classification
+    genres: list[str] = Field(default_factory=list)
+    moods: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+    # Submission signals
+    is_accepting_submissions: Optional[bool] = None
+    submission_guidelines: Optional[str] = None
+    contact_revealed_via: Optional[str] = None     # e.g. "playlister_popup", "description"
+
+    # Scoring (populated when evaluated against a StyleProfile)
+    current_score: Optional[ScoreBreakdown] = None
+    score_history: list[ScoreBreakdown] = Field(default_factory=list)
+
+    # User annotations
+    notes: Optional[str] = None
+    user_rating: Optional[int] = None              # 1-5
+    do_not_contact: bool = False
+
+    last_checked: Optional[datetime] = None
+
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+
+
+# =============================================================================
+# Curator
+# =============================================================================
 
 class Curator(BaseModel):
     """A playlist curator or playlist owner."""
@@ -37,56 +179,92 @@ class Curator(BaseModel):
     other_links: list[str] = Field(default_factory=list)
     notes: Optional[str] = None
 
+    last_contacted_at: Optional[datetime] = None
+    response_rate: Optional[float] = None   # 0-1, learned over time
 
-class Playlist(BaseModel):
-    """A music playlist that may accept submissions."""
+
+# =============================================================================
+# Pitch Generation
+# =============================================================================
+
+class Pitch(BaseModel):
+    """A generated (and potentially edited) submission for a specific song + target."""
 
     id: Optional[int] = None
-    platform: Platform
-    external_id: str  # e.g. Spotify playlist ID
-    name: str
-    url: HttpUrl
-    description: Optional[str] = None
-    curator: Optional[Curator] = None
-    follower_count: Optional[int] = None
-    track_count: Optional[int] = None
-    genres: list[str] = Field(default_factory=list)
-    moods: list[str] = Field(default_factory=list)
-    is_accepting_submissions: Optional[bool] = None
-    submission_guidelines: Optional[str] = None
-    last_checked: Optional[datetime] = None
-    tags: list[str] = Field(default_factory=list)  # e.g. ["lofi", "chill", "submissions-open"]
-    notes: Optional[str] = None
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
+    style_profile_id: int
+    playlist_id: int
+    song_title: str
+    song_lyrics: Optional[str] = None   # Can be omitted for privacy in some exports
 
+    format: PitchFormat = PitchFormat.EMAIL
+
+    # Generation metadata
+    llm_provider: str = "grok"
+    llm_model: str
+    prompt_version: str = "v1"
+
+    generated_text: str
+    user_edited_text: Optional[str] = None
+
+    # Final text actually used (falls back to edited → generated)
+    final_text: Optional[str] = None
+
+    # Tracking
+    sent: bool = False
+    sent_at: Optional[datetime] = None
+    submission_id: Optional[int] = None   # Link to Submission record
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+
+
+# =============================================================================
+# Submission Record (outreach history)
+# =============================================================================
 
 class Submission(BaseModel):
-    """Record of outreach to a playlist/curator."""
+    """Record of actual outreach to a playlist/curator."""
 
     id: Optional[int] = None
     playlist_id: int
+    pitch_id: Optional[int] = None
+
     track_title: str
-    artist: str
-    genre: Optional[str] = None
-    release_date: Optional[datetime] = None
-    pitch_text: Optional[str] = None
+    artist: str = "DK"   # TODO: make configurable
+
     status: SubmissionStatus = SubmissionStatus.NOT_CONTACTED
+    pitch_text_used: Optional[str] = None
+
     sent_at: Optional[datetime] = None
     responded_at: Optional[datetime] = None
     response_notes: Optional[str] = None
     follow_up_count: int = 0
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
-class SearchQuery(BaseModel):
-    """Parameters for discovering playlists."""
 
-    keywords: list[str] = Field(default_factory=list)
-    genres: list[str] = Field(default_factory=list)
-    min_followers: int = 100
-    max_followers: Optional[int] = None
-    platforms: list[Platform] = Field(default_factory=lambda: [Platform.SPOTIFY])
-    limit: int = 50
+# =============================================================================
+# Supporting / Future
+# =============================================================================
+
+class MiningRun(BaseModel):
+    """A recorded mining / discovery session against a StyleProfile."""
+
+    id: Optional[int] = None
+    style_profile_id: int
+    operating_mode: OperatingMode = OperatingMode.SEMI_AUTOMATIC
+    query: Optional[str] = None
+    min_followers: int = 1000
+    playlists_found: int = 0
+    playlists_imported: int = 0
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+
+
+# Rebuild forward refs
+Playlist.model_rebuild()
