@@ -49,6 +49,9 @@ dev = [
   "mypy>=1.10.0",
   "pre-commit>=3.7.0",
 ]
+ui = [
+  "streamlit>=1.38.0",
+]
 
 [project.scripts]
 dkplaylister = "dkplaylister.cli:app"

@@ -114,6 +114,17 @@ cp .env.example .env
 dkplaylister init
 ```
 
+### Local Web UI (Recommended)
+
+For day-to-day use, install the UI extras and run:
+
+```bash
+uv pip install -e ".[ui]"
+streamlit run ui/streamlit_app.py
+```
+
+This gives you a much better interface for reviewing targets and generating pitches.
+
 Future commands (in active development):
 
 ```bash
@@ -142,16 +153,12 @@ This is the actual style description currently being used to develop the system:
 
 ```
 DKPlaylister/
-├── src/dkplaylister/
-│   ├── cli.py
-│   ├── models.py          # StyleProfile, Playlist, Curator, Pitch, etc.
-│   ├── llm/               # Pluggable providers (grok.py first)
-│   ├── scoring.py         # Configurable prioritization engine
-│   ├── spotify.py
-│   ├── playlister.py      # Playlister.com ingestion helpers
-│   └── storage.py
-├── data/
+├── src/dkplaylister/          # Core Python package + CLI
+├── ui/
+│   └── streamlit_app.py       # Local web UI (recommended for daily use)
 ├── docs/
+├── data/
+├── CHANGELOG.md
 ├── pyproject.toml
 └── README.md
 ```

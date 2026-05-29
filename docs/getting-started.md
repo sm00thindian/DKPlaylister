@@ -52,17 +52,28 @@ dkplaylister init
 
 The project is currently focused on:
 
-- Defining and storing your **Style Prompt** (the detailed description of your music)
-- Building the pluggable Grok-powered pitch generation system
-- Creating the configurable scoring/prioritization engine
+- Defining and storing your **Style Prompt**
+- Bulk importing + scoring targets from Playlister
+- Grok-powered personalized pitch generation
+
+## Running the Local Web UI (Recommended for daily use)
+
+For a much nicer experience than pure CLI, run the Streamlit interface:
+
+```bash
+# Install UI dependencies
+uv pip install -e ".[ui]"
+
+# Run the web UI
+streamlit run ui/streamlit_app.py
+```
+
+The UI lets you:
+- Review and manage your Style Profile
+- Browse scored targets
+- Generate and edit pitches interactively
 
 See the main [README](../README.md) for the current vision and roadmap.
-
-## Next Steps (Planned)
-
-- `dkplaylister style set` — Load your detailed music description
-- `dkplaylister mine` — Semi-automatic target discovery (Playlister + Spotify)
-- `dkplaylister pitch` — Generate optimized submissions from your lyrics
 
 ## Tips for Effective Use
 

@@ -186,10 +186,51 @@ def auth(
 @app.command()
 def export(
     format: str = typer.Option("csv", "--format", "-f", help="csv | excel | json"),
-    status: Optional[str] = typer.Option(None, "--status", help="Filter by submission status"),
+    min_score: Optional[float] = typer.Option(None, "--min-score", help="Only export targets above this score"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path (defaults based on format)"),
 ):
-    """Export your playlist/submission data for campaigns."""
-    console.print(f"[yellow]Export to {format} (stub) — coming soon.[/]")
+    """Export your current playlist targets (with scores) for review or campaigns."""
+    from dkplaylister.utils import export_to_excel
+
+    repo = PlaylistRepository()
+    targets = repo.list_all(min_score=min_score)
+
+    if not targets:
+        console.print("[yellow]No targets to export.[/]")
+        raise typer.Exit(1)
+
+    # Prepare simple rows for export
+    rows = []
+    for t in targets:
+        score = t.current_score.total_value_score if t.current_score else None
+        rows.append({
+            "id": t.id,
+            "name": t.name,
+            "url": str(t.url),
+            "followers": t.follower_count,
+            "score": score,
+            "source": t.source.value,
+            "discovery_query": t.discovery_query or "",
+            "notes": t.notes or "",
+        })
+
+    if output is None:
+        ext = "xlsx" if format == "excel" else format
+        output = Path(f"dkplaylister_targets.{ext}")
+
+    if format == "excel":
+        export_to_excel(rows, output)
+    elif format == "csv":
+        import pandas as pd
+        pd.DataFrame(rows).to_csv(output, index=False)
+    elif format == "json":
+        import json
+        output.write_text(json.dumps(rows, indent=2, default=str))
+    else:
+        console.print(f"[red]Unsupported format: {format}[/]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓ Exported {len(rows)} targets to {output}[/]")
 
 
 @app.command()
