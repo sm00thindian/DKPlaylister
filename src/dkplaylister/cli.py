@@ -16,6 +16,7 @@ from rich.table import Table
 from dkplaylister import __version__
 from dkplaylister.llm import get_provider
 from dkplaylister.models import Playlist, StyleProfile, Curator, PlaylistSource, Platform
+from dkplaylister.scoring import PlaylistScorer, ScoringConfig
 from dkplaylister.storage import StyleProfileRepository
 
 app = typer.Typer(
@@ -249,6 +250,92 @@ def style_list():
         )
 
     console.print(table)
+
+
+# =============================================================================
+# Scoring Command
+# =============================================================================
+
+@app.command()
+def score(
+    playlist_url: str = typer.Argument(..., help="Spotify playlist URL to score"),
+    playlist_name: Optional[str] = typer.Option(None, "--name", "-n", help="Playlist name (optional but helpful)"),
+    style_id: Optional[int] = typer.Option(None, "--style-id", help="Specific Style Profile ID"),
+    use_latest: bool = typer.Option(True, "--latest/--no-latest", help="Use latest saved Style Profile"),
+    show_breakdown: bool = typer.Option(True, "--breakdown/--no-breakdown", help="Show detailed score breakdown"),
+):
+    """Score a playlist against your Style Profile using the new prioritization engine.
+
+    This is the core intelligence of DKPlaylister — it tells you how valuable a
+    playlist is likely to be *for your specific music*.
+    """
+    repo = StyleProfileRepository()
+
+    # Get style
+    if style_id:
+        style = repo.get_by_id(style_id)
+    else:
+        style = repo.get_latest()
+
+    if not style:
+        console.print("[red]No Style Profile found. Run [bold]dkplaylister style set[/] first.[/]")
+        raise typer.Exit(1)
+
+    # Create minimal Playlist object
+    target = Playlist(
+        platform=Platform.SPOTIFY,
+        external_id="scored",
+        name=playlist_name or "Unknown Playlist",
+        url=playlist_url,
+        description=None,
+        source=PlaylistSource.SPOTIFY_DIRECT,
+    )
+
+    console.print(f"[dim]Scoring against Style Profile #{style.id} ({style.name})...[/]")
+
+    try:
+        scorer = PlaylistScorer(style)
+        breakdown = scorer.score(target)
+    except Exception as e:
+        console.print(f"[red]Scoring failed:[/] {e}")
+        raise typer.Exit(1)
+
+    # Display results
+    console.print(Panel(
+        f"[bold]Total Value Score:[/] [cyan]{breakdown.total_value_score}/100[/]\n\n"
+        f"{breakdown.explanation}",
+        title=f"Score for {target.name}",
+        border_style="cyan",
+    ))
+
+    if show_breakdown:
+        table = Table(title="Detailed Breakdown")
+        table.add_column("Factor", style="bold")
+        table.add_column("Score", justify="right")
+        table.add_column("Weight", justify="right")
+        table.add_column("Contribution", justify="right")
+
+        cfg = ScoringConfig()
+        factors = [
+            ("Activity", breakdown.activity_score, cfg.weight_activity),
+            ("Fit (Style Match)", breakdown.fit_score, cfg.weight_fit),
+            ("Submission Openness", breakdown.openness_score, cfg.weight_openness),
+            ("Follower Reach", breakdown.follower_score, cfg.weight_followers),
+            ("Contact Quality", breakdown.contact_quality_score, cfg.weight_contact),
+            ("Your History", breakdown.personal_history_bonus, cfg.weight_history),
+            ("Risk Penalty", -breakdown.risk_penalty, -cfg.risk_penalty_weight),
+        ]
+
+        for name, score, weight in factors:
+            contrib = round(score * weight * 100, 1)
+            table.add_row(
+                name,
+                f"{score:.2f}",
+                f"{weight:.0%}",
+                f"{contrib:+.1f}",
+            )
+
+        console.print(table)
 
 
 # =============================================================================
