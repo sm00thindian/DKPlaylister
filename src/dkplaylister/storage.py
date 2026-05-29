@@ -17,7 +17,7 @@ from sqlalchemy import JSON, create_engine, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from dkplaylister.models import (
-    Band, Song, Playlist, PlaylistSource, Platform, StyleProfile, ScoreBreakdown
+    Band, Song, Album, Playlist, PlaylistSource, Platform, StyleProfile, ScoreBreakdown
 )
 
 
