@@ -64,14 +64,8 @@ st.sidebar.markdown("Local tool for high-signal playlist pitching")
 if "desired_mode" not in st.session_state:
     st.session_state.desired_mode = "Review Targets"
 
-# Support navigation via "Use for Pitch" button using query params (very reliable)
-if st.query_params.get("view") == "generate-pitch":
-    effective_mode = "Generate Pitch"
-else:
-    effective_mode = st.session_state.desired_mode
-
 mode_options = ["Review Targets", "Generate Pitch", "Manage Style"]
-current_index = mode_options.index(effective_mode)
+current_index = mode_options.index(st.session_state.desired_mode)
 
 mode = st.sidebar.radio(
     "Mode",
@@ -80,12 +74,8 @@ mode = st.sidebar.radio(
     key="mode_widget",
 )
 
-# If user manually changes the radio, clear any forced view and update state
-if mode != effective_mode:
-    if "view" in st.query_params:
-        del st.query_params["view"]
-    st.session_state.desired_mode = mode
-    effective_mode = mode
+# Keep desired_mode in sync when user manually changes the radio
+st.session_state.desired_mode = mode
 
 st.sidebar.divider()
 
@@ -97,7 +87,7 @@ else:
 
 # --- Main Content ---
 
-if effective_mode == "Review Targets":
+if mode == "Review Targets":
     st.header("Your Scored Targets")
     st.caption("Imported from Playlister + enriched + scored against your Style Profile")
 
@@ -129,12 +119,11 @@ if effective_mode == "Review Targets":
             with cols[3]:
                 if st.button("Use for Pitch", key=f"use_{t.id}"):
                     st.session_state.selected_target = t
-                    st.query_params["view"] = "generate-pitch"
-                    st.rerun()
+                    st.toast("Target selected! Switch to 'Generate Pitch' mode in the sidebar to continue.", icon="🎯")
 
             st.divider()
 
-elif effective_mode == "Generate Pitch":
+elif mode == "Generate Pitch":
     st.header("Generate Personalized Pitch")
 
     if not llm:
@@ -166,8 +155,6 @@ elif effective_mode == "Generate Pitch":
                 break
         # Clear it so it doesn't keep forcing on future reruns
         st.session_state.selected_target = None
-        if "view" in st.query_params:
-            del st.query_params["view"]
 
     if selected_target is None:
         selected_label = st.selectbox("Target Playlist", list(target_options.keys()))
@@ -272,7 +259,7 @@ elif effective_mode == "Generate Pitch":
             if st.button("Copy to Clipboard (manual)", use_container_width=True):
                 st.info("Select the text above and copy (Cmd/Ctrl+C)")
 
-elif effective_mode == "Manage Style":
+elif mode == "Manage Style":
     st.header("Your Style Profile")
 
     style = latest_style
