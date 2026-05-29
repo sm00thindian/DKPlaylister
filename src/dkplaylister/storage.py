@@ -193,7 +193,26 @@ def get_session(db_path: Optional[Path] = None):
     """Get a new session (creates tables if they don't exist)."""
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
+
+    # Phase 0 migration: safely add band_id to style_profiles if missing
+    _migrate_add_band_id_to_styles(engine)
+
     return sessionmaker(bind=engine)()
+
+
+def _migrate_add_band_id_to_styles(engine):
+    """Safe migration to add band_id column to style_profiles table."""
+    with engine.connect() as conn:
+        try:
+            # Check if column exists (SQLite specific)
+            result = conn.exec_driver_sql("PRAGMA table_info(style_profiles)")
+            columns = [row[1] for row in result.fetchall()]
+            if "band_id" not in columns:
+                conn.exec_driver_sql("ALTER TABLE style_profiles ADD COLUMN band_id INTEGER")
+                conn.commit()
+        except Exception:
+            # Column might already exist or table doesn't exist yet — safe to ignore
+            pass
 
 
 # =============================================================================
@@ -290,6 +309,16 @@ class StyleProfileRepository:
         self.session.delete(db_obj)
         self.session.commit()
         return True
+
+    def migrate_legacy_styles_to_band(self, band_id: int) -> int:
+        """Assigns styles with no band_id to the given band. Returns count updated."""
+        updated = (
+            self.session.query(StyleProfileDB)
+            .filter(StyleProfileDB.band_id.is_(None))
+            .update({StyleProfileDB.band_id: band_id})
+        )
+        self.session.commit()
+        return updated
 
 
 # =============================================================================
@@ -472,6 +501,24 @@ class BandRepository:
             created_at=db_band.created_at,
             updated_at=db_band.updated_at,
         )
+
+    def migrate_legacy_styles_to_default_band(self) -> int:
+        """
+        Phase 0 migration helper:
+        Assigns all styles that have band_id=NULL to the default band.
+        Returns number of styles updated.
+        """
+        default_band = self.get_or_create_default()
+        if not default_band:
+            return 0
+
+        updated = (
+            self.session.query(StyleProfileDB)
+            .filter(StyleProfileDB.band_id.is_(None))
+            .update({StyleProfileDB.band_id: default_band.id})
+        )
+        self.session.commit()
+        return updated
 
     def set_default(self, band_id: int) -> bool:
         """Mark a band as the default (simple implementation: we just return it as default)."""

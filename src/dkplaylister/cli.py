@@ -617,6 +617,29 @@ def song_show(song_id: int = typer.Argument(..., help="Song ID")):
 
 
 # =============================================================================
+# Database / Migration Helpers (Phase 0)
+# =============================================================================
+
+db_app = typer.Typer(help="Database and migration utilities (Phase 0)")
+app.add_typer(db_app, name="db")
+
+
+@db_app.command("migrate-legacy-styles")
+def db_migrate_legacy_styles(band_id: Optional[int] = typer.Option(None, "--band", help="Target band ID (creates default if omitted)")):
+    """Assign existing styles that have no band to a band (Phase 0 migration)."""
+    band_repo = BandRepository()
+    style_repo = StyleProfileRepository()
+
+    if band_id is None:
+        default_band = band_repo.get_or_create_default()
+        band_id = default_band.id
+        console.print(f"[dim]Using/created default band: {default_band.name} (ID {band_id})[/]")
+
+    count = style_repo.migrate_legacy_styles_to_band(band_id)
+    console.print(f"[green]✓[/] Migrated {count} legacy styles to band {band_id}.")
+
+
+# =============================================================================
 # Mining / Ingestion Commands (Semi-automatic flow)
 # =============================================================================
 
