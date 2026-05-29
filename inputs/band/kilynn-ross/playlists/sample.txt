@@ -1,0 +1,4 @@
+# Sample playlists from a Playlister search for testing
+# Replace these with real ones from your Playlister searches
+
+https://open.spotify.com/playlist/57Oh6iT1OjceyZVrE95Cv6

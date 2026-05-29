@@ -59,6 +59,44 @@ class OperatingMode(str, Enum):
 
 
 # =============================================================================
+# Multi-Band Support (New in v2)
+# =============================================================================
+
+class Band(BaseModel):
+    """An artist or band that can have multiple styles and songs."""
+
+    id: Optional[int] = None
+    name: str
+    slug: str  # e.g. "kilynn-ross" — used for folder organization
+    notes: Optional[str] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+
+
+class Song(BaseModel):
+    """A song with lyrics belonging to a specific band."""
+
+    id: Optional[int] = None
+    band_id: int
+    title: str
+    lyrics: str
+    notes: Optional[str] = None
+
+    # Optional metadata
+    key: Optional[str] = None
+    tempo: Optional[int] = None
+    duration_seconds: Optional[int] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+
+
+# =============================================================================
 # StyleProfile - The heart of the system
 # =============================================================================
 
@@ -67,9 +105,12 @@ class StyleProfile(BaseModel):
 
     This is the single source of truth that drives genre expansion,
     fit scoring, and personalized pitch generation.
+
+    In v2, styles belong to a specific Band.
     """
 
     id: Optional[int] = None
+    band_id: Optional[int] = None   # New in v2 — null during transition period
     name: str = "Default"
     raw_prompt: str = Field(..., description="The full, detailed style description provided by the user")
     primary_genres: list[str] = Field(default_factory=list)
@@ -192,10 +233,13 @@ class Pitch(BaseModel):
 
     id: Optional[int] = None
 
+    band_id: Optional[int] = None          # New in v2
     style_profile_id: int
+    song_id: Optional[int] = None          # Preferred over raw title/lyrics in v2
     playlist_id: int
-    song_title: str
-    song_lyrics: Optional[str] = None   # Can be omitted for privacy in some exports
+
+    song_title: str                        # Kept for backward compat / display
+    song_lyrics: Optional[str] = None      # Kept for backward compat
 
     format: PitchFormat = PitchFormat.EMAIL
 

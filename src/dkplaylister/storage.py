@@ -16,7 +16,9 @@ from typing import Optional
 from sqlalchemy import JSON, create_engine, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from dkplaylister.models import Playlist, PlaylistSource, Platform, StyleProfile, ScoreBreakdown
+from dkplaylister.models import (
+    Band, Song, Playlist, PlaylistSource, Platform, StyleProfile, ScoreBreakdown
+)
 
 
 class Base(DeclarativeBase):
@@ -33,6 +35,7 @@ class StyleProfileDB(Base):
     __tablename__ = "style_profiles"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    band_id: Mapped[Optional[int]] = mapped_column(default=None)  # v2
     name: Mapped[str] = mapped_column(default="Default")
     raw_prompt: Mapped[str]
 
@@ -59,6 +62,7 @@ class StyleProfileDB(Base):
 
         return StyleProfile(
             id=self.id,
+            band_id=self.band_id,
             name=self.name,
             raw_prompt=self.raw_prompt,
             primary_genres=self.primary_genres or [],
@@ -140,6 +144,39 @@ class PlaylistDB(Base):
         )
 
 
+class BandDB(Base):
+    """Database representation of a Band."""
+
+    __tablename__ = "bands"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str]
+    slug: Mapped[str] = mapped_column(unique=True)
+    notes: Mapped[Optional[str]] = mapped_column(default=None)
+
+    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
+
+
+class SongDB(Base):
+    """Database representation of a Song with lyrics."""
+
+    __tablename__ = "songs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    band_id: Mapped[int]
+    title: Mapped[str]
+    lyrics: Mapped[str]
+    notes: Mapped[Optional[str]] = mapped_column(default=None)
+
+    key: Mapped[Optional[str]] = mapped_column(default=None)
+    tempo: Mapped[Optional[int]] = mapped_column(default=None)
+    duration_seconds: Mapped[Optional[int]] = mapped_column(default=None)
+
+    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
+
+
 # =============================================================================
 # Engine & Session helpers
 # =============================================================================
@@ -174,6 +211,7 @@ class StyleProfileRepository:
         bpm_str = f"{profile.bpm_range[0]}-{profile.bpm_range[1]}"
 
         db_profile = StyleProfileDB(
+            band_id=profile.band_id,
             name=profile.name,
             raw_prompt=profile.raw_prompt,
             primary_genres=profile.primary_genres,
@@ -227,6 +265,7 @@ class StyleProfileRepository:
 
         bpm_str = f"{profile.bpm_range[0]}-{profile.bpm_range[1]}"
 
+        db_obj.band_id = profile.band_id
         db_obj.name = profile.name
         db_obj.raw_prompt = profile.raw_prompt
         db_obj.primary_genres = profile.primary_genres
@@ -342,3 +381,127 @@ class PlaylistRepository:
 
     def count(self) -> int:
         return self.session.query(PlaylistDB).count()
+
+
+# =============================================================================
+# Band & Song Repositories (v2)
+# =============================================================================
+
+class BandRepository:
+    """Data access for Bands."""
+
+    def __init__(self, session=None):
+        self.session = session or get_session()
+
+    def create(self, band: Band) -> BandDB:
+        db_band = BandDB(
+            name=band.name,
+            slug=band.slug,
+            notes=band.notes,
+        )
+        self.session.add(db_band)
+        self.session.commit()
+        self.session.refresh(db_band)
+        return db_band
+
+    def get_by_id(self, band_id: int) -> Optional[Band]:
+        db_obj = self.session.get(BandDB, band_id)
+        if not db_obj:
+            return None
+        return Band(
+            id=db_obj.id,
+            name=db_obj.name,
+            slug=db_obj.slug,
+            notes=db_obj.notes,
+            created_at=db_obj.created_at,
+            updated_at=db_obj.updated_at,
+        )
+
+    def get_by_slug(self, slug: str) -> Optional[Band]:
+        db_obj = self.session.query(BandDB).filter_by(slug=slug).first()
+        if not db_obj:
+            return None
+        return Band(
+            id=db_obj.id,
+            name=db_obj.name,
+            slug=db_obj.slug,
+            notes=db_obj.notes,
+            created_at=db_obj.created_at,
+            updated_at=db_obj.updated_at,
+        )
+
+    def list_all(self) -> list[Band]:
+        db_bands = self.session.query(BandDB).order_by(BandDB.name).all()
+        return [
+            Band(
+                id=b.id,
+                name=b.name,
+                slug=b.slug,
+                notes=b.notes,
+                created_at=b.created_at,
+                updated_at=b.updated_at,
+            )
+            for b in db_bands
+        ]
+
+
+class SongRepository:
+    """Data access for Songs."""
+
+    def __init__(self, session=None):
+        self.session = session or get_session()
+
+    def create(self, song: Song) -> SongDB:
+        db_song = SongDB(
+            band_id=song.band_id,
+            title=song.title,
+            lyrics=song.lyrics,
+            notes=song.notes,
+            key=song.key,
+            tempo=song.tempo,
+            duration_seconds=song.duration_seconds,
+        )
+        self.session.add(db_song)
+        self.session.commit()
+        self.session.refresh(db_song)
+        return db_song
+
+    def get_by_id(self, song_id: int) -> Optional[Song]:
+        db_obj = self.session.get(SongDB, song_id)
+        if not db_obj:
+            return None
+        return Song(
+            id=db_obj.id,
+            band_id=db_obj.band_id,
+            title=db_obj.title,
+            lyrics=db_obj.lyrics,
+            notes=db_obj.notes,
+            key=db_obj.key,
+            tempo=db_obj.tempo,
+            duration_seconds=db_obj.duration_seconds,
+            created_at=db_obj.created_at,
+            updated_at=db_obj.updated_at,
+        )
+
+    def list_by_band(self, band_id: int) -> list[Song]:
+        db_songs = (
+            self.session.query(SongDB)
+            .filter_by(band_id=band_id)
+            .order_by(SongDB.title)
+            .all()
+        )
+        return [
+            Song(
+                id=s.id,
+                band_id=s.band_id,
+                title=s.title,
+                lyrics=s.lyrics,
+                notes=s.notes,
+                key=s.key,
+                tempo=s.tempo,
+                duration_seconds=s.duration_seconds,
+                created_at=s.created_at,
+                updated_at=s.updated_at,
+            )
+            for s in db_songs
+        ]

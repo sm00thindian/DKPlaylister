@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -14,6 +15,9 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from dkplaylister import __version__
+
+# Always load .env from the project root when running CLI commands
+load_dotenv()
 from dkplaylister.llm import get_provider
 from dkplaylister.models import Playlist, StyleProfile, Curator, PlaylistSource, Platform
 from dkplaylister.scoring import (
@@ -54,7 +58,10 @@ def _import_playlist(
     if name:
         playlist.name = name
 
-    playlist.source = source.lower()  # type: ignore
+    try:
+        playlist.source = PlaylistSource(source.lower())
+    except ValueError:
+        playlist.source = PlaylistSource.PLAYLISTER
     playlist.discovery_query = query
 
     if score_it:

@@ -24,9 +24,20 @@ def get_client() -> spotipy.Spotify:
     """
     Return an authenticated Spotify client (Client Credentials flow for public data).
 
-    Note: We handle 429 rate limits manually in our wrapper functions.
+    Supports both SPOTIFY_* and SPOTIPY_* environment variable names.
     """
-    return spotipy.Spotify(auth_manager=SpotifyClientCredentials())
+    client_id = os.getenv("SPOTIFY_CLIENT_ID") or os.getenv("SPOTIPY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET") or os.getenv("SPOTIPY_CLIENT_SECRET")
+
+    if not client_id or not client_secret:
+        # Fall back to spotipy's default behavior (which will raise a clear error)
+        return spotipy.Spotify(auth_manager=SpotifyClientCredentials())
+
+    auth_manager = SpotifyClientCredentials(
+        client_id=client_id,
+        client_secret=client_secret
+    )
+    return spotipy.Spotify(auth_manager=auth_manager)
 
 
 def _handle_rate_limit(func, *args, **kwargs):

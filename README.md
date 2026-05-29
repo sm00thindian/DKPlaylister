@@ -66,10 +66,12 @@ DKPlaylister treats Playlister as one powerful input among others (Spotify direc
 ## Updated Roadmap
 
 ### Phase 0: Foundation (Current)
-- Solid local database + provenance tracking (where every target came from)
-- StyleProfile as the central concept
+- Solid local database + provenance tracking
+- StyleProfile, Playlist, Pitch, and Submission models
 - Configurable prioritization and scoring engine
 - Pluggable Grok-first LLM layer
+
+**In progress (Data Model v2):** Multi-band support with Bands, multiple Styles per band, and multiple Songs/Lyrics per band. See `docs/data-model-v2.md`.
 
 ### Phase 1: Discovery & Mining (Next)
 - Strong Playlister + Spotify hybrid ingestion
