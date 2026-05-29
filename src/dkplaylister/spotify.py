@@ -1,49 +1,121 @@
-"""Spotify Web API integration for playlist discovery.
-
-Phase 1 stub. Full implementation will use spotipy with proper rate limiting,
-curator extraction via regex on descriptions, and pagination.
-"""
+"""Spotify Web API integration for playlist discovery and enrichment."""
 
 from __future__ import annotations
 
-from typing import Any
+import re
+from typing import Optional
+from urllib.parse import urlparse
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 
-from dkplaylister.models import Playlist, SearchQuery
+from dkplaylister.models import Curator, Platform, Playlist, PlaylistSource
 
 
 def get_client() -> spotipy.Spotify:
-    """Return an authenticated Spotify client (client credentials flow for public data)."""
-    # TODO: load from settings / env
-    # For public playlist search, Client Credentials is sufficient.
+    """Return an authenticated Spotify client (Client Credentials flow for public data)."""
     return spotipy.Spotify(auth_manager=SpotifyClientCredentials())
 
 
-def search_playlists(query: SearchQuery) -> list[Playlist]:
-    """Search Spotify for playlists matching the query.
+def parse_spotify_playlist_id(url_or_id: str) -> Optional[str]:
+    """Extract playlist ID from a Spotify URL or return the ID if already clean."""
+    if not url_or_id:
+        return None
 
-    This is a stub. Real version will:
-    - Combine keywords + genre into Spotify search queries
-    - Paginate results (Spotify caps at ~50 per query)
-    - Parse descriptions for emails / socials using regex
-    - Filter by follower count
-    - Store results via storage layer
+    # If it's already just an ID (22 characters, alphanumeric)
+    if re.match(r"^[a-zA-Z0-9]{22}$", url_or_id):
+        return url_or_id
+
+    try:
+        parsed = urlparse(url_or_id)
+        if "spotify.com" in parsed.netloc and "/playlist/" in parsed.path:
+            # Handle both /playlist/37i9dQZF1DXcBWIGoYBM5M and with query params
+            parts = parsed.path.strip("/").split("/")
+            if len(parts) >= 2 and parts[0] == "playlist":
+                return parts[1].split("?")[0]
+    except Exception:
+        pass
+
+    return None
+
+
+def fetch_playlist(spotify_url_or_id: str) -> Optional[Playlist]:
     """
+    Fetch rich data for a single Spotify playlist and return a Playlist model.
+
+    This is the core enrichment function for the semi-automatic mining flow.
+    """
+    playlist_id = parse_spotify_playlist_id(spotify_url_or_id)
+    if not playlist_id:
+        return None
+
     client = get_client()
 
-    # Example (will be expanded):
-    # results = client.search(q="lofi submissions", type="playlist", limit=20)
-    # Then transform to Playlist models...
+    try:
+        sp_playlist = client.playlist(playlist_id, fields="id,name,description,followers.total,owner,external_urls.spotify,tracks.total")
+    except Exception as e:
+        print(f"Failed to fetch playlist {playlist_id}: {e}")
+        return None
 
-    return []  # placeholder
+    # Build Playlist object
+    playlist = Playlist(
+        platform=Platform.SPOTIFY,
+        external_id=sp_playlist["id"],
+        name=sp_playlist.get("name", "Unknown Playlist"),
+        url=sp_playlist["external_urls"]["spotify"],
+        description=sp_playlist.get("description"),
+        follower_count=sp_playlist.get("followers", {}).get("total"),
+        track_count=sp_playlist.get("tracks", {}).get("total"),
+        source=PlaylistSource.SPOTIFY_DIRECT,
+    )
+
+    # Owner / basic curator info
+    owner = sp_playlist.get("owner", {})
+    if owner:
+        curator = Curator(
+            name=owner.get("display_name"),
+        )
+        # We can try to get more curator info later
+        playlist.curator = curator
+
+    return playlist
 
 
-def extract_curator_contacts(description: str) -> dict[str, str]:
-    """Extract emails, @handles, and URLs from a playlist description.
-
-    Future: use regex + validation.
+def enrich_playlist(playlist: Playlist) -> Playlist:
     """
-    # TODO: implement robust extraction
-    return {}
+    Enrich an existing Playlist object with fresh Spotify data.
+    Useful when we already have a partial record (e.g. from Playlister import).
+    """
+    if playlist.platform != Platform.SPOTIFY:
+        return playlist
+
+    enriched = fetch_playlist(playlist.url or playlist.external_id)
+    if enriched:
+        # Preserve our internal fields
+        enriched.id = playlist.id
+        enriched.source = playlist.source or PlaylistSource.SPOTIFY_DIRECT
+        enriched.discovery_query = playlist.discovery_query
+        enriched.notes = playlist.notes
+        return enriched
+
+    return playlist
+
+
+def extract_contacts_from_description(description: str) -> dict:
+    """Basic contact extraction from playlist descriptions."""
+    if not description:
+        return {}
+
+    contacts = {}
+
+    # Email
+    email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", description)
+    if email_match:
+        contacts["email"] = email_match.group(0)
+
+    # Instagram / Twitter / TikTok handles
+    ig = re.search(r"(?:@|instagram\.com/)([a-zA-Z0-9_.]+)", description, re.I)
+    if ig:
+        contacts["instagram"] = ig.group(1)
+
+    return contacts

@@ -23,7 +23,8 @@ from dkplaylister.scoring import (
     load_scoring_config,
     list_scoring_configs,
 )
-from dkplaylister.storage import StyleProfileRepository
+from dkplaylister.spotify import fetch_playlist
+from dkplaylister.storage import PlaylistRepository, StyleProfileRepository
 
 app = typer.Typer(
     name="dkplaylister",
@@ -306,6 +307,104 @@ def scoring_show(name: str):
         console.print(Panel(str(cfg), title=f"Scoring Profile: {name}"))
     except FileNotFoundError:
         console.print(f"[red]Profile '{name}' not found.[/]")
+
+
+# =============================================================================
+# Mining / Ingestion Commands (Semi-automatic flow)
+# =============================================================================
+
+@app.command()
+def add(
+    url: str = typer.Argument(..., help="Spotify playlist URL"),
+    source: str = typer.Option("playlister", "--source", help="playlister | spotify | manual"),
+    query: Optional[str] = typer.Option(None, "--query", "-q", help="The search term used on Playlister (for provenance)"),
+    name: Optional[str] = typer.Option(None, "--name", help="Override playlist name"),
+    score_it: bool = typer.Option(True, "--score/--no-score", help="Automatically score against latest StyleProfile"),
+):
+    """Add a playlist (typically from Playlister) into your targets database.
+
+    This is the main command for the semi-automatic workflow.
+    Example: dkplaylister add "https://open.spotify.com/playlist/57Oh6iT1OjceyZVrE95Cv6" --query "Indie Cinematic"
+    """
+    repo = PlaylistRepository()
+    style_repo = StyleProfileRepository()
+
+    console.print(f"[dim]Fetching playlist data from Spotify...[/]")
+
+    playlist = fetch_playlist(url)
+    if not playlist:
+        console.print(f"[red]Could not fetch playlist from Spotify. Check the URL.[/]")
+        raise typer.Exit(1)
+
+    if name:
+        playlist.name = name
+
+    # Set provenance
+    playlist.source = source.lower()  # type: ignore
+    playlist.discovery_query = query
+
+    # Optional scoring
+    if score_it:
+        style = style_repo.get_latest()
+        if style:
+            try:
+                scorer = PlaylistScorer(style)
+                scorer.score(playlist)
+                console.print(f"[dim]Scored: {playlist.current_score.total_value_score}/100[/]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not score playlist ({e})[/]")
+        else:
+            console.print("[dim]No Style Profile found — skipping scoring.[/]")
+
+    db_playlist = repo.create_or_update(playlist)
+
+    console.print(
+        Panel.fit(
+            f"[green]✓[/] Added/updated playlist (ID: {db_playlist.id})\n"
+            f"Name: {playlist.name}\n"
+            f"Followers: {playlist.follower_count or 'N/A'}\n"
+            f"Source: {source} | Query: {query or 'N/A'}",
+            title="Playlist Added",
+            border_style="green",
+        )
+    )
+
+
+@app.command("targets")
+def targets_list(
+    min_score: Optional[float] = typer.Option(None, "--min-score", help="Only show playlists above this score"),
+    limit: int = typer.Option(20, "--limit", "-l"),
+):
+    """List your saved playlist targets, sorted by value."""
+    repo = PlaylistRepository()
+    targets = repo.list_all(min_score=min_score)[:limit]
+
+    if not targets:
+        console.print("[yellow]No targets found. Use [bold]dkplaylister add[/] to start importing from Playlister.[/]")
+        return
+
+    table = Table(title=f"Your Targets (showing {len(targets)})")
+    table.add_column("ID", justify="right", style="cyan")
+    table.add_column("Name")
+    table.add_column("Score", justify="right")
+    table.add_column("Followers", justify="right")
+    table.add_column("Source / Query")
+
+    for t in targets:
+        score_str = f"{t.current_score.total_value_score:.0f}" if t.current_score else "—"
+        source_str = t.source.value
+        if t.discovery_query:
+            source_str += f" ({t.discovery_query})"
+
+        table.add_row(
+            str(t.id),
+            t.name[:45] + ("..." if len(t.name) > 45 else ""),
+            score_str,
+            f"{t.follower_count:,}" if t.follower_count else "—",
+            source_str,
+        )
+
+    console.print(table)
 
 
 # =============================================================================

@@ -16,7 +16,7 @@ from typing import Optional
 from sqlalchemy import JSON, create_engine, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from dkplaylister.models import StyleProfile
+from dkplaylister.models import Playlist, PlaylistSource, Platform, StyleProfile, ScoreBreakdown
 
 
 class Base(DeclarativeBase):
@@ -72,6 +72,69 @@ class StyleProfileDB(Base):
             target_audience=self.target_audience,
             similar_artists=self.similar_artists or [],
             version=self.version,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+
+class PlaylistDB(Base):
+    """Database representation of a Playlist target."""
+
+    __tablename__ = "playlists"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    platform: Mapped[str]
+    external_id: Mapped[str]
+    name: Mapped[str]
+    url: Mapped[str]
+    description: Mapped[Optional[str]] = mapped_column(default=None)
+
+    source: Mapped[str] = mapped_column(default=PlaylistSource.SPOTIFY_DIRECT.value)
+    discovery_query: Mapped[Optional[str]] = mapped_column(default=None)   # e.g. "Indie Cinematic" from Playlister
+
+    follower_count: Mapped[Optional[int]] = mapped_column(default=None)
+    track_count: Mapped[Optional[int]] = mapped_column(default=None)
+
+    # JSON fields
+    genres: Mapped[list[str]] = mapped_column(JSON, default=list)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    # Scoring
+    current_score_json: Mapped[Optional[str]] = mapped_column(default=None)  # Store ScoreBreakdown as JSON
+
+    # User data
+    notes: Mapped[Optional[str]] = mapped_column(default=None)
+    do_not_contact: Mapped[bool] = mapped_column(default=False)
+
+    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
+
+    def to_pydantic(self) -> Playlist:
+        score = None
+        if self.current_score_json:
+            try:
+                data = json.loads(self.current_score_json)
+                score = ScoreBreakdown(**data)
+            except Exception:
+                pass
+
+        return Playlist(
+            id=self.id,
+            platform=Platform(self.platform),
+            external_id=self.external_id,
+            name=self.name,
+            url=self.url,
+            description=self.description,
+            source=PlaylistSource(self.source),
+            discovery_query=self.discovery_query,
+            follower_count=self.follower_count,
+            track_count=self.track_count,
+            genres=self.genres or [],
+            tags=self.tags or [],
+            current_score=score,
+            notes=self.notes,
+            do_not_contact=self.do_not_contact,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -190,3 +253,92 @@ class StyleProfileRepository:
         self.session.delete(db_obj)
         self.session.commit()
         return True
+
+
+# =============================================================================
+# Playlist Repository
+# =============================================================================
+
+class PlaylistRepository:
+    """Data access for playlist targets with scoring support."""
+
+    def __init__(self, session=None):
+        self.session = session or get_session()
+
+    def create_or_update(self, playlist: Playlist) -> PlaylistDB:
+        """Create or update a playlist record (by platform + external_id)."""
+        existing = (
+            self.session.query(PlaylistDB)
+            .filter_by(platform=playlist.platform.value, external_id=playlist.external_id)
+            .first()
+        )
+
+        score_json = None
+        if playlist.current_score:
+            try:
+                score_json = playlist.current_score.model_dump_json()
+            except Exception:
+                score_json = None
+
+        if existing:
+            existing.name = playlist.name
+            existing.description = playlist.description
+            existing.url = str(playlist.url)
+            existing.follower_count = playlist.follower_count
+            existing.track_count = playlist.track_count
+            existing.genres = playlist.genres
+            existing.tags = playlist.tags
+            existing.current_score_json = score_json
+            existing.source = playlist.source.value
+            existing.discovery_query = playlist.discovery_query or existing.discovery_query
+            existing.notes = playlist.notes or existing.notes
+            existing.do_not_contact = playlist.do_not_contact
+
+            self.session.commit()
+            self.session.refresh(existing)
+            return existing
+        else:
+            db_obj = PlaylistDB(
+                platform=playlist.platform.value,
+                external_id=playlist.external_id,
+                name=playlist.name,
+                url=str(playlist.url),
+                description=playlist.description,
+                source=playlist.source.value,
+                discovery_query=playlist.discovery_query,
+                follower_count=playlist.follower_count,
+                track_count=playlist.track_count,
+                genres=playlist.genres or [],
+                tags=playlist.tags or [],
+                current_score_json=score_json,
+                notes=playlist.notes,
+                do_not_contact=playlist.do_not_contact,
+            )
+            self.session.add(db_obj)
+            self.session.commit()
+            self.session.refresh(db_obj)
+            return db_obj
+
+    def get_by_id(self, playlist_id: int) -> Optional[Playlist]:
+        db_obj = self.session.get(PlaylistDB, playlist_id)
+        return db_obj.to_pydantic() if db_obj else None
+
+    def list_all(self, min_score: Optional[float] = None) -> list[Playlist]:
+        """Return playlists, optionally filtered by minimum value score."""
+        db_playlists = (
+            self.session.query(PlaylistDB)
+            .order_by(PlaylistDB.updated_at.desc())
+            .all()
+        )
+
+        results = []
+        for db_p in db_playlists:
+            p = db_p.to_pydantic()
+            if min_score is not None and p.current_score:
+                if p.current_score.total_value_score < min_score:
+                    continue
+            results.append(p)
+        return results
+
+    def count(self) -> int:
+        return self.session.query(PlaylistDB).count()
