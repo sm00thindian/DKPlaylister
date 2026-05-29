@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dkplaylister"
+version = "0.1.0"
+description = "Discover and manage playlist submission opportunities for music promotion"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+  {name = "Kilynn Weber", email = "cheesy.email@gmail.com"}
+]
+keywords = ["music", "playlists", "spotify", "promotion", "indie", "curator", "submissions"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Utilities",
+  "Environment :: Console",
+]
+dependencies = [
+  "typer[all]>=0.12.0",
+  "rich>=13.7.0",
+  "pydantic>=2.7.0",
+  "pydantic-settings>=2.3.0",
+  "httpx>=0.27.0",
+  "python-dotenv>=1.0.0",
+  "spotipy>=2.24.0",
+  "sqlalchemy>=2.0.30",
+  "alembic>=1.13.0",
+  "pandas>=2.2.0",
+  "openpyxl>=3.1.0",  # for Excel export
+  "textual>=0.80.0",  # future TUI
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.4.0",
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.0",
+  "mypy>=1.10.0",
+  "pre-commit>=3.7.0",
+]
+
+[project.scripts]
+dkplaylister = "dkplaylister.cli:app"
+dkp = "dkplaylister.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/sm00thindian/DKPlaylister"
+Repository = "https://github.com/sm00thindian/DKPlaylister"
+Issues = "https://github.com/sm00thindian/DKPlaylister/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dkplaylister"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

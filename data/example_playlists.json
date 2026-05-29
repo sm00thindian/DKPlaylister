@@ -1,0 +1,24 @@
+[
+  {
+    "platform": "spotify",
+    "name": "Example: Chillhop Essentials",
+    "url": "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+    "description": "Chillhop music for studying, relaxing, or focusing. Submissions: chillhopmusic@gmail.com (please include Spotify link + 1 paragraph pitch)",
+    "follower_count": 850000,
+    "genres": ["chillhop", "lofi", "jazzhop"],
+    "tags": ["submissions-open", "studying", "chill"],
+    "curator": {
+      "email": "chillhopmusic@gmail.com",
+      "notes": "Active and responsive according to public reports"
+    }
+  },
+  {
+    "platform": "spotify",
+    "name": "Example: Indie Submissions Welcome",
+    "url": "https://open.spotify.com/playlist/0example123",
+    "description": "Open to indie submissions! Email: indiesubmissions@curator.net | IG: @indiecurator",
+    "follower_count": 12500,
+    "genres": ["indie", "alternative"],
+    "tags": ["submissions", "indie"]
+  }
+]
