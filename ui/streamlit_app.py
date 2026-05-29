@@ -35,8 +35,8 @@ st.set_page_config(
 )
 
 # Initialize session state
-if "mode" not in st.session_state:
-    st.session_state.mode = "Review Targets"
+if "desired_mode" not in st.session_state:
+    st.session_state.desired_mode = "Review Targets"
 if "selected_target" not in st.session_state:
     st.session_state.selected_target = None
 
@@ -60,12 +60,22 @@ llm = get_llm()
 st.sidebar.title("DKPlaylister")
 st.sidebar.markdown("Local tool for high-signal playlist pitching")
 
-# Use a single session state key for the radio so setting it programmatically works reliably
+# --- Mode handling (robust way to allow programmatic switching) ---
+if "desired_mode" not in st.session_state:
+    st.session_state.desired_mode = "Review Targets"
+
+mode_options = ["Review Targets", "Generate Pitch", "Manage Style"]
+current_index = mode_options.index(st.session_state.desired_mode)
+
 mode = st.sidebar.radio(
     "Mode",
-    ["Review Targets", "Generate Pitch", "Manage Style"],
-    key="mode",
+    mode_options,
+    index=current_index,
+    key="mode_widget",   # Different key from the value we control programmatically
 )
+
+# If the user manually changed the radio, update desired_mode
+st.session_state.desired_mode = mode
 
 st.sidebar.divider()
 
@@ -109,7 +119,7 @@ if mode == "Review Targets":
             with cols[3]:
                 if st.button("Use for Pitch", key=f"use_{t.id}"):
                     st.session_state.selected_target = t
-                    st.session_state.mode = "Generate Pitch"
+                    st.session_state.desired_mode = "Generate Pitch"
                     st.rerun()
 
             st.divider()
