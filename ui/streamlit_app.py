@@ -29,7 +29,7 @@ from dkplaylister.storage import (
 )
 from dkplaylister.llm import get_provider
 from dkplaylister.scoring import PlaylistScorer
-from dkplaylister.models import StyleProfile, Band, Song
+from dkplaylister.models import StyleProfile, Band, Song, Album
 
 load_dotenv()
 
