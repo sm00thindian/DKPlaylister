@@ -68,6 +68,15 @@ uv pip install -e ".[ui]"
 streamlit run ui/streamlit_app.py
 ```
 
+**macOS users**: If you see a message recommending `watchdog`, you can install it with:
+
+```bash
+xcode-select --install
+pip install watchdog
+```
+
+(Or just run `pip install -e ".[ui]"` again — it now includes watchdog.)
+
 The UI lets you:
 - Review and manage your Style Profile
 - Browse scored targets

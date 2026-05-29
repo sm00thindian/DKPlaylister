@@ -51,6 +51,7 @@ dev = [
 ]
 ui = [
   "streamlit>=1.38.0",
+  "watchdog>=4.0.0",   # Recommended on macOS for better file watching / auto-reload performance
 ]
 
 [project.scripts]
