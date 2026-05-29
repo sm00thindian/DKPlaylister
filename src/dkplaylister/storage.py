@@ -236,22 +236,20 @@ class StyleProfileRepository:
         db_obj = self.session.get(StyleProfileDB, profile_id)
         return db_obj.to_pydantic() if db_obj else None
 
-    def get_latest(self) -> Optional[StyleProfile]:
-        """Return the most recently updated StyleProfile."""
-        db_obj = (
-            self.session.query(StyleProfileDB)
-            .order_by(StyleProfileDB.updated_at.desc())
-            .first()
-        )
+    def get_latest(self, band_id: Optional[int] = None) -> Optional[StyleProfile]:
+        """Return the most recently updated StyleProfile (optionally scoped to a band)."""
+        query = self.session.query(StyleProfileDB)
+        if band_id is not None:
+            query = query.filter(StyleProfileDB.band_id == band_id)
+        db_obj = query.order_by(StyleProfileDB.updated_at.desc()).first()
         return db_obj.to_pydantic() if db_obj else None
 
-    def list_all(self) -> list[StyleProfile]:
-        """Return all StyleProfiles (newest first)."""
-        results = (
-            self.session.query(StyleProfileDB)
-            .order_by(StyleProfileDB.updated_at.desc())
-            .all()
-        )
+    def list_all(self, band_id: Optional[int] = None) -> list[StyleProfile]:
+        """Return all StyleProfiles (newest first, optionally filtered by band)."""
+        query = self.session.query(StyleProfileDB)
+        if band_id is not None:
+            query = query.filter(StyleProfileDB.band_id == band_id)
+        results = query.order_by(StyleProfileDB.updated_at.desc()).all()
         return [r.to_pydantic() for r in results]
 
     def update(self, profile: StyleProfile) -> Optional[StyleProfile]:
@@ -444,6 +442,60 @@ class BandRepository:
             for b in db_bands
         ]
 
+    def get_default(self) -> Optional[Band]:
+        """Return the first band (useful as a default during transition)."""
+        db_obj = self.session.query(BandDB).order_by(BandDB.id).first()
+        if not db_obj:
+            return None
+        return Band(
+            id=db_obj.id,
+            name=db_obj.name,
+            slug=db_obj.slug,
+            notes=db_obj.notes,
+            created_at=db_obj.created_at,
+            updated_at=db_obj.updated_at,
+        )
+
+    def get_or_create_default(self, name: str = "Personal", slug: str = "personal") -> Band:
+        """Get the first band, or create a default one if none exists."""
+        existing = self.get_default()
+        if existing:
+            return existing
+
+        new_band = Band(name=name, slug=slug)
+        db_band = self.create(new_band)
+        return Band(
+            id=db_band.id,
+            name=db_band.name,
+            slug=db_band.slug,
+            notes=db_band.notes,
+            created_at=db_band.created_at,
+            updated_at=db_band.updated_at,
+        )
+
+    def update(self, band: Band) -> Optional[Band]:
+        if band.id is None:
+            return None
+        db_obj = self.session.get(BandDB, band.id)
+        if not db_obj:
+            return None
+
+        db_obj.name = band.name
+        db_obj.slug = band.slug
+        db_obj.notes = band.notes
+
+        self.session.commit()
+        self.session.refresh(db_obj)
+        return self.get_by_id(db_obj.id)
+
+    def delete(self, band_id: int) -> bool:
+        db_obj = self.session.get(BandDB, band_id)
+        if not db_obj:
+            return False
+        self.session.delete(db_obj)
+        self.session.commit()
+        return True
+
 
 class SongRepository:
     """Data access for Songs."""
@@ -505,3 +557,29 @@ class SongRepository:
             )
             for s in db_songs
         ]
+
+    def update(self, song: Song) -> Optional[Song]:
+        if song.id is None:
+            return None
+        db_obj = self.session.get(SongDB, song.id)
+        if not db_obj or db_obj.band_id != song.band_id:
+            return None
+
+        db_obj.title = song.title
+        db_obj.lyrics = song.lyrics
+        db_obj.notes = song.notes
+        db_obj.key = song.key
+        db_obj.tempo = song.tempo
+        db_obj.duration_seconds = song.duration_seconds
+
+        self.session.commit()
+        self.session.refresh(db_obj)
+        return self.get_by_id(db_obj.id)
+
+    def delete(self, song_id: int) -> bool:
+        db_obj = self.session.get(SongDB, song_id)
+        if not db_obj:
+            return False
+        self.session.delete(db_obj)
+        self.session.commit()
+        return True

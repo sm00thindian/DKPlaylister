@@ -28,7 +28,13 @@ from dkplaylister.scoring import (
     list_scoring_configs,
 )
 from dkplaylister.spotify import fetch_playlist
-from dkplaylister.storage import PlaylistRepository, StyleProfileRepository
+from dkplaylister.storage import (
+    BandRepository,
+    SongRepository,
+    PlaylistRepository,
+    StyleProfileRepository,
+)
+from dkplaylister.models import Band, Song
 
 
 def _import_playlist(
@@ -329,17 +335,19 @@ def style_show(
 
 
 @style_app.command("list")
-def style_list():
-    """List all saved Style Profiles."""
+def style_list(band_id: Optional[int] = typer.Option(None, "--band", help="Filter by band ID")):
+    """List saved Style Profiles (optionally for a specific band)."""
     repo = StyleProfileRepository()
-    profiles = repo.list_all()
+    profiles = repo.list_all(band_id=band_id)
 
     if not profiles:
-        console.print("[yellow]No Style Profiles saved yet.[/]")
+        console.print("[yellow]No Style Profiles found for the given criteria.[/]")
         return
 
-    table = Table(title="Your Style Profiles")
+    title = f"Style Profiles for Band {band_id}" if band_id else "Your Style Profiles"
+    table = Table(title=title)
     table.add_column("ID", style="cyan", justify="right")
+    table.add_column("Band", justify="right")
     table.add_column("Name")
     table.add_column("Updated", style="dim")
     table.add_column("Prompt Length", justify="right")
@@ -347,6 +355,7 @@ def style_list():
     for p in profiles:
         table.add_row(
             str(p.id),
+            str(p.band_id) if p.band_id else "—",
             p.name,
             p.updated_at.strftime("%Y-%m-%d %H:%M"),
             f"{len(p.raw_prompt)} chars",
@@ -403,6 +412,181 @@ def scoring_show(name: str):
         console.print(Panel(str(cfg), title=f"Scoring Profile: {name}"))
     except FileNotFoundError:
         console.print(f"[red]Profile '{name}' not found.[/]")
+
+
+# =============================================================================
+# Band Management (Phase 1 of Data Model v2)
+# =============================================================================
+
+band_app = typer.Typer(help="Manage bands/artists")
+app.add_typer(band_app, name="band")
+
+
+@band_app.command("create")
+def band_create(
+    name: str = typer.Argument(..., help="Band/artist name"),
+    slug: Optional[str] = typer.Option(None, "--slug", help="URL/folder friendly slug (auto-generated if omitted)"),
+    notes: Optional[str] = typer.Option(None, "--notes", help="Optional notes"),
+):
+    """Create a new band."""
+    repo = BandRepository()
+
+    if slug is None:
+        slug = name.lower().replace(" ", "-").replace("_", "-")
+
+    # Check for duplicate slug
+    existing = repo.get_by_slug(slug)
+    if existing:
+        console.print(f"[red]A band with slug '{slug}' already exists (ID {existing.id}).[/]")
+        raise typer.Exit(1)
+
+    band = Band(name=name, slug=slug, notes=notes)
+    db_band = repo.create(band)
+
+    console.print(
+        Panel.fit(
+            f"[green]✓[/] Band created (ID: {db_band.id})\n"
+            f"Name: {db_band.name}\n"
+            f"Slug: {db_band.slug}",
+            title="Band Created",
+            border_style="green",
+        )
+    )
+
+
+@band_app.command("list")
+def band_list():
+    """List all bands."""
+    repo = BandRepository()
+    bands = repo.list_all()
+
+    if not bands:
+        console.print("[yellow]No bands found. Create one with [bold]dkplaylister band create[/].[/]")
+        return
+
+    table = Table(title="Bands")
+    table.add_column("ID", justify="right", style="cyan")
+    table.add_column("Name")
+    table.add_column("Slug")
+    table.add_column("Notes")
+
+    for b in bands:
+        table.add_row(str(b.id), b.name, b.slug, (b.notes or "")[:50])
+
+    console.print(table)
+
+
+@band_app.command("show")
+def band_show(band_id: int = typer.Argument(..., help="Band ID")):
+    """Show details for a specific band."""
+    repo = BandRepository()
+    band = repo.get_by_id(band_id)
+
+    if not band:
+        console.print(f"[red]Band {band_id} not found.[/]")
+        raise typer.Exit(1)
+
+    console.print(Panel(
+        f"**Name:** {band.name}\n"
+        f"**Slug:** {band.slug}\n"
+        f"**Notes:** {band.notes or '—'}\n"
+        f"**Created:** {band.created_at.strftime('%Y-%m-%d')}",
+        title=f"Band #{band.id}",
+        border_style="cyan",
+    ))
+
+
+# =============================================================================
+# Song / Lyrics Management (Phase 1 of Data Model v2)
+# =============================================================================
+
+song_app = typer.Typer(help="Manage songs and lyrics per band")
+app.add_typer(song_app, name="song")
+
+
+@song_app.command("add")
+def song_add(
+    band_id: int = typer.Option(..., "--band", help="Band ID"),
+    title: str = typer.Option(..., "--title", "-t", help="Song title"),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="File containing lyrics"),
+    notes: Optional[str] = typer.Option(None, "--notes", help="Optional notes"),
+):
+    """Add a new song with lyrics to a band."""
+    repo = SongRepository()
+
+    if file:
+        if not file.exists():
+            console.print(f"[red]File not found: {file}[/]")
+            raise typer.Exit(1)
+        lyrics = file.read_text()
+    else:
+        console.print("[dim]Enter lyrics (end with Ctrl+D or Ctrl+Z):[/]")
+        lyrics = sys.stdin.read().strip()
+
+    if not lyrics:
+        console.print("[red]Lyrics cannot be empty.[/]")
+        raise typer.Exit(1)
+
+    song = Song(band_id=band_id, title=title, lyrics=lyrics, notes=notes)
+    db_song = repo.create(song)
+
+    console.print(
+        Panel.fit(
+            f"[green]✓[/] Song added (ID: {db_song.id})\n"
+            f"Title: {db_song.title}\n"
+            f"Band ID: {db_song.band_id}\n"
+            f"Lyrics length: {len(lyrics)} chars",
+            title="Song Added",
+            border_style="green",
+        )
+    )
+
+
+@song_app.command("list")
+def song_list(band_id: int = typer.Option(..., "--band", help="Band ID")):
+    """List songs for a band."""
+    repo = SongRepository()
+    songs = repo.list_by_band(band_id)
+
+    if not songs:
+        console.print(f"[yellow]No songs found for band {band_id}.[/]")
+        return
+
+    table = Table(title=f"Songs for Band {band_id}")
+    table.add_column("ID", justify="right", style="cyan")
+    table.add_column("Title")
+    table.add_column("Lyrics Length")
+    table.add_column("Notes")
+
+    for s in songs:
+        table.add_row(
+            str(s.id),
+            s.title,
+            str(len(s.lyrics)),
+            (s.notes or "")[:40],
+        )
+
+    console.print(table)
+
+
+@song_app.command("show")
+def song_show(song_id: int = typer.Argument(..., help="Song ID")):
+    """Show a song with its lyrics."""
+    repo = SongRepository()
+    song = repo.get_by_id(song_id)
+
+    if not song:
+        console.print(f"[red]Song {song_id} not found.[/]")
+        raise typer.Exit(1)
+
+    console.print(Panel(
+        f"**Title:** {song.title}\n"
+        f"**Band ID:** {song.band_id}\n"
+        f"**Notes:** {song.notes or '—'}\n\n"
+        f"**Lyrics:**\n{song.lyrics}",
+        title=f"Song #{song.id}",
+        border_style="cyan",
+    ))
 
 
 # =============================================================================
