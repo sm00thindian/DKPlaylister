@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,7 @@ from rich.table import Table
 from dkplaylister import __version__
 from dkplaylister.llm import get_provider
 from dkplaylister.models import Playlist, StyleProfile, Curator, PlaylistSource, Platform
+from dkplaylister.storage import StyleProfileRepository
 
 app = typer.Typer(
     name="dkplaylister",
@@ -147,6 +149,109 @@ def stats():
 
 
 # =============================================================================
+# Style Profile Commands
+# =============================================================================
+
+style_app = typer.Typer(help="Manage your music Style Profiles (the foundation of DKPlaylister)")
+app.add_typer(style_app, name="style")
+
+
+@style_app.command("set")
+def style_set(
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="Path to a text file containing your style prompt"),
+    name: str = typer.Option("Default", "--name", "-n", help="Name for this style profile"),
+    stdin: bool = typer.Option(False, "--stdin", help="Read style prompt from standard input"),
+):
+    """Save a new Style Profile from a file or stdin.
+
+    This is the most important command — your detailed music description powers
+    discovery, scoring, and high-quality pitch generation.
+    """
+    repo = StyleProfileRepository()
+
+    if file:
+        if not file.exists():
+            console.print(f"[red]File not found:[/] {file}")
+            raise typer.Exit(1)
+        raw_prompt = file.read_text().strip()
+    elif stdin:
+        console.print("[dim]Paste your style description below. Press Ctrl+D (Unix) or Ctrl+Z (Windows) when done.[/]")
+        raw_prompt = sys.stdin.read().strip()
+    else:
+        console.print("[yellow]Please provide either --file or --stdin[/]")
+        raise typer.Exit(1)
+
+    if not raw_prompt:
+        console.print("[red]Style prompt cannot be empty.[/]")
+        raise typer.Exit(1)
+
+    profile = StyleProfile(raw_prompt=raw_prompt, name=name)
+    db_profile = repo.create(profile)
+
+    console.print(
+        Panel.fit(
+            f"[green]✓[/] Style Profile saved (ID: {db_profile.id})\n"
+            f"Name: {db_profile.name}\n"
+            f"Length: {len(raw_prompt)} characters",
+            title="Style Profile Created",
+            border_style="green",
+        )
+    )
+
+
+@style_app.command("show")
+def style_show(
+    profile_id: Optional[int] = typer.Argument(None, help="Style Profile ID (shows latest if omitted)"),
+):
+    """Display a saved Style Profile."""
+    repo = StyleProfileRepository()
+
+    if profile_id:
+        profile = repo.get_by_id(profile_id)
+    else:
+        profile = repo.get_latest()
+
+    if not profile:
+        console.print("[yellow]No Style Profiles found. Use [bold]dkplaylister style set[/] first.[/]")
+        raise typer.Exit(1)
+
+    console.print(Panel(f"[bold]ID:[/] {profile.id}\n"
+                        f"[bold]Name:[/] {profile.name}\n"
+                        f"[bold]Version:[/] {profile.version}\n"
+                        f"[bold]Updated:[/] {profile.updated_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+                        f"{profile.raw_prompt}",
+                        title=f"Style Profile #{profile.id}",
+                        border_style="cyan"))
+
+
+@style_app.command("list")
+def style_list():
+    """List all saved Style Profiles."""
+    repo = StyleProfileRepository()
+    profiles = repo.list_all()
+
+    if not profiles:
+        console.print("[yellow]No Style Profiles saved yet.[/]")
+        return
+
+    table = Table(title="Your Style Profiles")
+    table.add_column("ID", style="cyan", justify="right")
+    table.add_column("Name")
+    table.add_column("Updated", style="dim")
+    table.add_column("Prompt Length", justify="right")
+
+    for p in profiles:
+        table.add_row(
+            str(p.id),
+            p.name,
+            p.updated_at.strftime("%Y-%m-%d %H:%M"),
+            f"{len(p.raw_prompt)} chars",
+        )
+
+    console.print(table)
+
+
+# =============================================================================
 # Real Pitch Generation Command (first working high-value feature)
 # =============================================================================
 
@@ -218,10 +323,16 @@ If I get my say…
 I’m coming home"""
 
 
+# =============================================================================
+# Real Pitch Generation Command (first working high-value feature)
+# =============================================================================
+
 @app.command()
 def pitch(
     song_title: str = typer.Option(TEST_SONG_TITLE, "--song", "-s", help="Song title"),
-    style: Optional[str] = typer.Option(None, "--style", help="Path to style prompt file (uses built-in test style if omitted)"),
+    style_id: Optional[int] = typer.Option(None, "--style-id", help="Use a specific saved Style Profile by ID"),
+    style_file: Optional[str] = typer.Option(None, "--style-file", help="Path to a style prompt file (overrides saved profiles)"),
+    use_latest: bool = typer.Option(True, "--latest/--no-latest", help="Use the most recently saved Style Profile (default)"),
     playlist_url: str = typer.Option(
         "https://open.spotify.com/playlist/57Oh6iT1OjceyZVrE95Cv6",
         "--playlist", "-p",
@@ -249,14 +360,30 @@ def pitch(
         )
         raise typer.Exit(1)
 
-    # Load style
-    if style and Path(style).exists():
-        style_prompt = Path(style).read_text()
-    else:
-        style_prompt = TEST_STYLE_PROMPT
-        console.print("[dim]Using built-in test style (Atmospheric cinematic indie rock/folk)[/]")
+    repo = StyleProfileRepository()
 
-    style_profile = StyleProfile(raw_prompt=style_prompt.strip(), name="Current")
+    # Determine which style to use (priority: explicit file > style_id > latest saved > built-in test data)
+    if style_file and Path(style_file).exists():
+        style_prompt = Path(style_file).read_text().strip()
+        style_profile = StyleProfile(raw_prompt=style_prompt, name=Path(style_file).stem)
+        console.print(f"[dim]Using style from file: {style_file}[/]")
+    elif style_id:
+        style_profile = repo.get_by_id(style_id)
+        if not style_profile:
+            console.print(f"[red]No Style Profile found with ID {style_id}[/]")
+            raise typer.Exit(1)
+        console.print(f"[dim]Using saved Style Profile #{style_id} ({style_profile.name})[/]")
+    elif use_latest:
+        style_profile = repo.get_latest()
+        if style_profile:
+            console.print(f"[dim]Using latest saved Style Profile #{style_profile.id} ({style_profile.name})[/]")
+        else:
+            style_profile = None
+
+    # Fallback to built-in test data
+    if not style_profile:
+        style_profile = StyleProfile(raw_prompt=TEST_STYLE_PROMPT.strip(), name="Built-in Test Style (Atmospheric Cinematic)")
+        console.print("[yellow]No saved Style Profiles found. Using built-in test style.[/]")
 
     # Minimal playlist object for context
     target_playlist = Playlist(
