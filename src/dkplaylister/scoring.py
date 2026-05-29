@@ -11,9 +11,11 @@ Core idea:
 
 from __future__ import annotations
 
+import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from dkplaylister.llm import LLMProvider, get_provider
@@ -118,20 +120,36 @@ class PlaylistScorer:
 
     def _score_activity(self, playlist: Playlist) -> float:
         """Higher score for recently active playlists."""
-        if not playlist.last_activity_at:
-            # No data → neutral/mild positive if it has a description
-            return 0.45 if playlist.description else 0.35
+        base = 0.35
 
-        # Simple recency scoring (can be made much smarter later)
-        days_ago = (playlist.last_activity_at - __import__("datetime").datetime.utcnow()).days
-        if days_ago <= 14:
-            return 0.95
+        if playlist.description:
+            base += 0.10
+
+        # Strong signals of an active, maintained playlist
+        text = (playlist.description or "").lower() + " " + " ".join(playlist.tags).lower()
+        active_signals = ["updated weekly", "updated monthly", "new music", "fresh", "weekly", "curated", "new finds"]
+        for signal in active_signals:
+            if signal in text:
+                base += 0.15
+                break
+
+        if not playlist.last_activity_at:
+            return min(0.65, base)
+
+        # Recency scoring
+        from datetime import datetime
+        days_ago = (datetime.utcnow() - playlist.last_activity_at).days
+
+        if days_ago <= 7:
+            return 0.98
+        elif days_ago <= 21:
+            return 0.90
         elif days_ago <= 45:
-            return 0.80
+            return 0.78
         elif days_ago <= 90:
-            return 0.65
+            return 0.62
         else:
-            return 0.40
+            return max(0.25, base)
 
     def _score_fit(self, playlist: Playlist) -> float:
         """Semantic + keyword fit between style and playlist."""
@@ -165,24 +183,30 @@ class PlaylistScorer:
         text = " ".join([
             (playlist.description or "").lower(),
             " ".join(playlist.tags).lower(),
-            playlist.submission_guidelines or "",
+            (playlist.submission_guidelines or "").lower(),
         ])
 
-        score = 0.3  # baseline
+        score = 0.28  # baseline
 
-        # Strong boost from Playlister (they only show playlists with public contact)
-        if playlist.source and "playlister" in str(playlist.source).lower():
-            score += 0.35
+        # Strong boost from Playlister (curators who publicly shared contact)
+        source_str = str(playlist.source or "").lower()
+        if "playlister" in source_str:
+            score += 0.38
 
         # Keyword matches
+        matches = 0
         for kw in self.config.submission_keywords:
             if kw.lower() in text:
-                score += 0.12
-                break
+                matches += 1
+        score += min(0.28, matches * 0.09)
 
         # Explicit flag
         if playlist.is_accepting_submissions:
-            score += 0.25
+            score += 0.22
+
+        # Good sign: curator name or contact info visible
+        if playlist.curator and (playlist.curator.email or playlist.curator.instagram):
+            score += 0.12
 
         return min(1.0, round(score, 3))
 
@@ -218,22 +242,35 @@ class PlaylistScorer:
         return min(1.0, round(score, 3))
 
     def _score_risk(self, playlist: Playlist) -> float:
-        """Negative score for red flags."""
+        """Negative score for red flags (bots, pay-to-play, low quality)."""
         text = " ".join([
             (playlist.description or "").lower(),
             (playlist.submission_guidelines or "").lower(),
         ])
 
         penalty = 0.0
+
+        # Direct bad signals
         for signal in self.config.bad_signals:
             if signal.lower() in text:
-                penalty += 0.35
+                penalty += 0.38
 
-        # Very large playlists with no recent activity are risky
-        if (playlist.follower_count or 0) > 100_000 and not playlist.last_activity_at:
-            penalty += 0.20
+        # Very large + inactive = higher risk of being botted or neglected
+        followers = playlist.follower_count or 0
+        if followers > 120_000 and not playlist.last_activity_at:
+            penalty += 0.22
+        elif followers > 80_000 and playlist.last_activity_at:
+            days = (__import__("datetime").datetime.utcnow() - playlist.last_activity_at).days
+            if days > 120:
+                penalty += 0.15
 
-        return min(0.6, round(penalty, 3))  # cap the penalty
+        # Suspiciously generic names + huge follower count
+        generic_names = ["hits", "top", "viral", "bangers", "popular", "trending", "ultimate"]
+        name_lower = (playlist.name or "").lower()
+        if any(g in name_lower for g in generic_names) and followers > 150_000:
+            penalty += 0.12
+
+        return min(0.65, round(penalty, 3))
 
     # -------------------------------------------------------------------------
     # Final composite + explanation
@@ -283,3 +320,34 @@ class PlaylistScorer:
             reasons.append("balanced profile")
 
         return ", ".join(reasons).capitalize() + "."
+
+
+# =============================================================================
+# Config Persistence (simple JSON-based for now)
+# =============================================================================
+
+CONFIG_DIR = Path("data") / "scoring_configs"
+
+
+def save_scoring_config(name: str, config: ScoringConfig) -> Path:
+    """Save a named ScoringConfig to disk as JSON."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    path = CONFIG_DIR / f"{name}.json"
+    path.write_text(json.dumps(asdict(config), indent=2))
+    return path
+
+
+def load_scoring_config(name: str) -> ScoringConfig:
+    """Load a named ScoringConfig from disk."""
+    path = CONFIG_DIR / f"{name}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"Scoring config '{name}' not found at {path}")
+    data = json.loads(path.read_text())
+    return ScoringConfig(**data)
+
+
+def list_scoring_configs() -> list[str]:
+    """List available saved scoring config names."""
+    if not CONFIG_DIR.exists():
+        return []
+    return [p.stem for p in CONFIG_DIR.glob("*.json")]

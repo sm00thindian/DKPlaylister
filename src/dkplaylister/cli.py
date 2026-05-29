@@ -16,7 +16,13 @@ from rich.table import Table
 from dkplaylister import __version__
 from dkplaylister.llm import get_provider
 from dkplaylister.models import Playlist, StyleProfile, Curator, PlaylistSource, Platform
-from dkplaylister.scoring import PlaylistScorer, ScoringConfig
+from dkplaylister.scoring import (
+    PlaylistScorer,
+    ScoringConfig,
+    save_scoring_config,
+    load_scoring_config,
+    list_scoring_configs,
+)
 from dkplaylister.storage import StyleProfileRepository
 
 app = typer.Typer(
@@ -253,6 +259,56 @@ def style_list():
 
 
 # =============================================================================
+# Scoring Config Management
+# =============================================================================
+
+scoring_app = typer.Typer(help="Manage saved scoring weight profiles")
+app.add_typer(scoring_app, name="scoring")
+
+
+@scoring_app.command("save")
+def scoring_save(
+    name: str = typer.Argument(..., help="Name for this scoring profile"),
+    fit: float = typer.Option(0.30, "--fit", help="Weight for style fit"),
+    activity: float = typer.Option(0.25, "--activity", help="Weight for playlist activity"),
+    openness: float = typer.Option(0.15, "--openness"),
+    followers: float = typer.Option(0.12, "--followers"),
+    contact: float = typer.Option(0.10, "--contact"),
+):
+    """Save a custom scoring weight profile."""
+    cfg = ScoringConfig(
+        weight_fit=fit,
+        weight_activity=activity,
+        weight_openness=openness,
+        weight_followers=followers,
+        weight_contact=contact,
+    )
+    path = save_scoring_config(name, cfg)
+    console.print(f"[green]✓[/] Saved scoring profile '{name}' to {path}")
+
+
+@scoring_app.command("list")
+def scoring_list():
+    """List saved scoring profiles."""
+    names = list_scoring_configs()
+    if not names:
+        console.print("[yellow]No saved scoring profiles yet.[/]")
+        return
+    for n in names:
+        console.print(f"• {n}")
+
+
+@scoring_app.command("show")
+def scoring_show(name: str):
+    """Show details of a saved scoring profile."""
+    try:
+        cfg = load_scoring_config(name)
+        console.print(Panel(str(cfg), title=f"Scoring Profile: {name}"))
+    except FileNotFoundError:
+        console.print(f"[red]Profile '{name}' not found.[/]")
+
+
+# =============================================================================
 # Scoring Command
 # =============================================================================
 
@@ -263,6 +319,9 @@ def score(
     style_id: Optional[int] = typer.Option(None, "--style-id", help="Specific Style Profile ID"),
     use_latest: bool = typer.Option(True, "--latest/--no-latest", help="Use latest saved Style Profile"),
     show_breakdown: bool = typer.Option(True, "--breakdown/--no-breakdown", help="Show detailed score breakdown"),
+    # Quick weight overrides for experimentation
+    fit_weight: Optional[float] = typer.Option(None, "--fit-weight", help="Override fit weight (0.0-1.0)"),
+    activity_weight: Optional[float] = typer.Option(None, "--activity-weight", help="Override activity weight"),
 ):
     """Score a playlist against your Style Profile using the new prioritization engine.
 
@@ -294,7 +353,15 @@ def score(
     console.print(f"[dim]Scoring against Style Profile #{style.id} ({style.name})...[/]")
 
     try:
-        scorer = PlaylistScorer(style)
+        config = ScoringConfig()
+
+        # Apply quick CLI overrides if provided
+        if fit_weight is not None:
+            config.weight_fit = fit_weight
+        if activity_weight is not None:
+            config.weight_activity = activity_weight
+
+        scorer = PlaylistScorer(style, config=config)
         breakdown = scorer.score(target)
     except Exception as e:
         console.print(f"[red]Scoring failed:[/] {e}")

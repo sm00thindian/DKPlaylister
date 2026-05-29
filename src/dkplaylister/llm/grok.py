@@ -117,24 +117,49 @@ Write a strong, personalized {pitch_format} pitch for this curator/playlist.
     ) -> float:
         """Ask Grok to score how well the playlist fits the artist's style (0.0–1.0)."""
 
-        prompt = f"""Rate how well this playlist matches the following artist style on a scale of 0.0 to 1.0.
+        # Build rich structured context from the full StyleProfile
+        style_details = f"""Primary Genres: {', '.join(style_profile.primary_genres) or 'Not specified'}
+Secondary/Related Genres: {', '.join(style_profile.secondary_genres) or 'Not specified'}
+BPM Range: {style_profile.bpm_range[0]}–{style_profile.bpm_range[1]}
+Energy Level: {style_profile.energy_level}
+Mood Keywords: {', '.join(style_profile.mood_keywords) or 'Not specified'}
+Sonic Characteristics: {', '.join(style_profile.sonic_characteristics) or 'Not specified'}
+Vocal Style: {style_profile.vocal_style or 'Not specified'}
+Production Notes: {style_profile.production_notes or 'Not specified'}
+Similar Artists: {', '.join(style_profile.similar_artists) or 'Not specified'}"""
 
-Artist Style:
+        prompt = f"""You are an expert A&R and playlist curator analyst.
+
+Rate how well this playlist matches the artist's specific musical style on a scale from 0.0 to 1.0.
+
+Artist Style Profile:
 {style_profile.raw_prompt}
 
-Playlist:
-Name: {playlist.name}
-Description: {playlist.description or 'N/A'}
-Genres/Tags: {', '.join(playlist.genres + playlist.tags) or 'unknown'}
+Structured Details:
+{style_details}
 
-Respond with ONLY a single number between 0.0 and 1.0 (e.g. 0.87). No explanation."""
+Target Playlist:
+- Name: {playlist.name}
+- Description: {playlist.description or 'No description available'}
+- Reported Genres/Tags: {', '.join(playlist.genres + playlist.tags) or 'Unknown'}
+- Followers: {playlist.follower_count or 'Unknown'}
+
+Scoring Guidelines:
+- 0.90–1.00 = Extremely strong match (very close to the artist's sound and aesthetic)
+- 0.70–0.89 = Good match (clear overlap in genre, mood, and production)
+- 0.50–0.69 = Moderate / partial match
+- 0.30–0.49 = Weak match
+- 0.00–0.29 = Poor match
+
+Respond with ONLY a single decimal number between 0.0 and 1.0 (example: 0.83). 
+No explanation or extra text."""
 
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=20,
+                temperature=0.2,
+                max_tokens=10,
             )
             text = response.choices[0].message.content.strip()
             score = float(text)
