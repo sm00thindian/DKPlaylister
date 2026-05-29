@@ -120,7 +120,10 @@ if mode == "Review Targets":
                 if st.button("Use for Pitch", key=f"use_{t.id}"):
                     st.session_state.selected_target = t
                     st.session_state.desired_mode = "Generate Pitch"
-                    st.rerun()
+                    # Note: We intentionally do NOT call st.rerun() here.
+                    # The button click itself triggers a rerun, and setting
+                    # desired_mode before that rerun is enough. Extra rerun()
+                    # can sometimes interfere with widget state.
 
             st.divider()
 
