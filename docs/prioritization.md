@@ -18,7 +18,7 @@ All factors below are **configurable** (weights, thresholds, and penalties can b
 | **Genre + Vibe Fit**          | Very High         | How well the playlist matches your detailed Style Prompt (semantic understanding + keyword signals). This is where Grok helps significantly. |
 | **Submission Openness**       | High              | Explicit or strong signals that the curator accepts outside music ("submissions", "accepting demos", public contact info, recent adds from similar artists, etc.). Playlister.com results get a natural boost here. |
 | **Follower Count**            | Medium            | Log-scaled with strong diminishing returns. A thoughtfully curated 10–25k playlist often ranks higher than a neglected 100k+ playlist. |
-| **Contact Quality**           | Medium-High       | Real email address > active and responsive Instagram > tracked bit.ly/short link > no usable contact. |
+| **Contact Quality**           | Medium-High       | Real email address > active and responsive Instagram > tracked bit.ly/short link > no usable contact. Playlister-sourced targets get an automatic boost because the curator opted in to being discoverable. |
 | **Your Historical Data**      | High (grows over time) | Has this curator or similar playlists responded positively to you before? Have you had success in this follower range or genre niche? |
 | **Risk / Bot Penalties**      | Strong Negative   | Evidence or strong suspicion of botted playlists, pay-to-play language, extremely low engagement relative to size, or curators you've previously flagged as low quality. |
 
@@ -53,3 +53,17 @@ However, they are still run through the full scoring engine (especially Activity
 - **Configurable** so the system improves with you
 
 This is one of the most important differentiators of DKPlaylister compared to other tools.
+
+## Capturing Real Contact Information
+
+Spotify's public API gives almost no curator contact details (only the owner's display name and Spotify profile URL). The valuable contact signals you see in **DistroKid Playlister** (emails, forms, bit.ly links, etc.) come from the curator opting into Playlister — not from Spotify.
+
+DKPlaylister now supports three ways to capture this:
+
+1. **Automatic description mining** — On import/enrich we scan the playlist description for emails and @handles.
+2. **Spotify user profile enrichment** — We look up the playlist owner's public profile to capture their Spotify URL as a weak website signal.
+3. **Explicit Playlister popup capture (recommended)** — Use the new `--curator-email`, `--curator-instagram`, `--curator-website` (and `--contact-via playlister_popup`) flags on `dkplaylister add` / `import`, or the "Add New Target" form in the Streamlit UI's Review Targets tab.
+
+Targets with captured contact info are clearly flagged in both the CLI (`list-targets`) and the web UI (color badges + expanded contact section). The scoring engine already weights `contact_quality_score` and the openness factor.
+
+**Pro tip**: When reviewing Playlister results, copy the contact details from the popup into the add form / CLI flags. This is currently the highest-signal way to know *how* to actually reach a curator.

@@ -91,6 +91,9 @@ class Song(BaseModel):
     tempo: Optional[int] = None
     duration_seconds: Optional[int] = None
 
+    # Streaming links after release (platform → URL)
+    streaming_links: dict[str, str] = Field(default_factory=dict)
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -216,6 +219,41 @@ class Playlist(BaseModel):
 
     last_checked: Optional[datetime] = None
 
+    # --- Contact helpers (for UI + CLI display + flagging) ---
+    @property
+    def has_contact_info(self) -> bool:
+        """True if we have a usable way to reach the curator."""
+        if self.curator:
+            c = self.curator
+            if c.email or c.instagram or c.website or c.other_links:
+                return True
+        if self.contact_revealed_via:
+            # Playlister popup or manual note counts as "has signal"
+            return True
+        return False
+
+    @property
+    def contact_summary(self) -> str:
+        """Human-friendly short summary for lists and UI."""
+        if self.curator:
+            c = self.curator
+            parts = []
+            if c.email:
+                parts.append(f"email: {c.email}")
+            if c.instagram:
+                parts.append(f"IG: @{c.instagram}")
+            if c.website:
+                parts.append(f"web: {c.website}")
+            if parts:
+                return " | ".join(parts)
+            if c.name:
+                return f"Curator: {c.name}"
+        if self.contact_revealed_via == "playlister_popup":
+            return "Playlister (contact in popup)"
+        if self.contact_revealed_via:
+            return f"Contact via {self.contact_revealed_via}"
+        return "No contact info"
+
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
@@ -288,8 +326,10 @@ class Submission(BaseModel):
     """Record of actual outreach to a playlist/curator."""
 
     id: Optional[int] = None
+    band_id: Optional[int] = None          # New for consistent scoping (P0-4)
     playlist_id: int
     pitch_id: Optional[int] = None
+    song_id: Optional[int] = None
 
     track_title: str
     artist: str = "DK"   # TODO: make configurable
@@ -301,6 +341,7 @@ class Submission(BaseModel):
     responded_at: Optional[datetime] = None
     response_notes: Optional[str] = None
     follow_up_count: int = 0
+    notes: Optional[str] = None            # Convenience alias for storage roundtrip
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -313,17 +354,43 @@ class Submission(BaseModel):
 # =============================================================================
 
 class MiningRun(BaseModel):
-    """A recorded mining / discovery session against a StyleProfile."""
+    """A recorded mining / discovery session against a StyleProfile (Phase 1)."""
 
     id: Optional[int] = None
+    band_id: Optional[int] = None
     style_profile_id: int
+    style_profile_name: Optional[str] = None   # Snapshot for history
+
     operating_mode: OperatingMode = OperatingMode.SEMI_AUTOMATIC
-    query: Optional[str] = None
+
+    # What was used for this run
+    queries_used: list[str] = Field(default_factory=list)
     min_followers: int = 1000
+    expansion_explanation: Optional[str] = None   # From StyleDiscoveryExpansion
+
+    # Results
     playlists_found: int = 0
     playlists_imported: int = 0
+    top_score: Optional[float] = None
+
+    notes: Optional[str] = None
+
     started_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
+
+
+class StyleDiscoveryExpansion(BaseModel):
+    """Structured output from expanding a StyleProfile for discovery/mining (Phase 1)."""
+
+    primary_genres: list[str] = Field(default_factory=list)
+    sub_genres: list[str] = Field(default_factory=list)
+    moods: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list)   # Ready-to-use queries for Spotify/Playlister
+    similar_artists: list[str] = Field(default_factory=list)
+    playlist_title_hints: list[str] = Field(default_factory=list)
+    explanation: str = ""
+
+    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
 
 
 # Rebuild forward refs

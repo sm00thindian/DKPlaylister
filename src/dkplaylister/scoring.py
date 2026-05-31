@@ -313,6 +313,11 @@ class PlaylistScorer:
         if b.openness_score > 0.7:
             reasons.append("clearly open to submissions")
 
+        if b.contact_quality_score > 0.65:
+            reasons.append("strong contact signal available")
+        elif b.contact_quality_score < 0.3:
+            reasons.append("limited contact options")
+
         if b.follower_score > 0.7:
             reasons.append("good reach")
         elif b.follower_score < 0.3:

@@ -42,14 +42,16 @@ You are helping me build an application using the Spotify Web API. Follow these 
 
 - We are primarily using **Client Credentials** flow (correct for public playlist data).
 - Main endpoint in use: `GET /playlists/{id}` (still supported).
-- We have a helper prepared for future user-auth flows (`get_oauth_client`).
+- Authorization Code Flow is now active via `get_user_client()` / `get_oauth_client()`.
+- Use `dkplaylister auth spotify` (or `dkplaylister auth spotify --status`) to manage login.
 - Registered redirect URI: `http://127.0.0.1:8888/callback`
+- Recommended way to get an authenticated client: `from dkplaylister.spotify import get_user_client`
 
 ## Review Checklist (from Spotify)
 
 Before shipping Spotify-related code, verify:
 
-- [ ] Using the correct OAuth flow
+- [x] Using the correct OAuth flow (Authorization Code Flow available via `get_user_client()`)
 - [ ] Redirect URIs are correct (HTTPS or 127.0.0.1)
 - [ ] Minimum necessary scopes
 - [ ] Proper token storage & refresh

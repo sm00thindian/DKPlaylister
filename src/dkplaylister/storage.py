@@ -17,7 +17,9 @@ from sqlalchemy import JSON, create_engine, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from dkplaylister.models import (
-    Band, Song, Album, Playlist, PlaylistSource, Platform, StyleProfile, ScoreBreakdown
+    Band, Song, Album, Playlist, Curator, PlaylistSource, Platform, 
+    StyleProfile, ScoreBreakdown, Pitch, PitchFormat, SubmissionStatus,
+    MiningRun, OperatingMode
 )
 
 
@@ -111,6 +113,10 @@ class PlaylistDB(Base):
     notes: Mapped[Optional[str]] = mapped_column(default=None)
     do_not_contact: Mapped[bool] = mapped_column(default=False)
 
+    # Contact / Curator enrichment (new for contact mining)
+    curator_json: Mapped[Optional[str]] = mapped_column(default=None)
+    contact_revealed_via: Mapped[Optional[str]] = mapped_column(default=None)
+
     created_at: Mapped[datetime] = mapped_column(default=func.now())
     updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
 
@@ -120,6 +126,14 @@ class PlaylistDB(Base):
             try:
                 data = json.loads(self.current_score_json)
                 score = ScoreBreakdown(**data)
+            except Exception:
+                pass
+
+        curator = None
+        if self.curator_json:
+            try:
+                cdata = json.loads(self.curator_json)
+                curator = Curator(**cdata)
             except Exception:
                 pass
 
@@ -136,6 +150,8 @@ class PlaylistDB(Base):
             track_count=self.track_count,
             genres=self.genres or [],
             tags=self.tags or [],
+            curator=curator,
+            contact_revealed_via=self.contact_revealed_via,
             current_score=score,
             notes=self.notes,
             do_not_contact=self.do_not_contact,
@@ -174,6 +190,9 @@ class SongDB(Base):
     tempo: Mapped[Optional[int]] = mapped_column(default=None)
     duration_seconds: Mapped[Optional[int]] = mapped_column(default=None)
 
+    # Streaming links after release (stored as JSON: {"spotify": "...", "apple_music": "...", ...})
+    streaming_links: Mapped[dict] = mapped_column(JSON, default=dict)
+
     created_at: Mapped[datetime] = mapped_column(default=func.now())
     updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
 
@@ -193,6 +212,83 @@ class AlbumDB(Base):
     updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
 
 
+class PitchDB(Base):
+    """Database representation of a generated Pitch."""
+
+    __tablename__ = "pitches"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    band_id: Mapped[Optional[int]] = mapped_column(default=None)
+    style_profile_id: Mapped[int]
+    song_id: Mapped[Optional[int]] = mapped_column(default=None)
+    playlist_id: Mapped[int]
+
+    song_title: Mapped[str]
+    song_lyrics: Mapped[Optional[str]] = mapped_column(default=None)
+
+    format: Mapped[str] = mapped_column(default=PitchFormat.EMAIL.value)
+
+    llm_provider: Mapped[str] = mapped_column(default="grok")
+    llm_model: Mapped[str]
+    prompt_version: Mapped[str] = mapped_column(default="v1")
+
+    generated_text: Mapped[str]
+    user_edited_text: Mapped[Optional[str]] = mapped_column(default=None)
+    final_text: Mapped[Optional[str]] = mapped_column(default=None)
+
+    sent: Mapped[bool] = mapped_column(default=False)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+    submission_id: Mapped[Optional[int]] = mapped_column(default=None)
+
+    created_at: Mapped[datetime] = mapped_column(default=func.now())
+
+
+class SubmissionDB(Base):
+    """Database representation of a Submission (outreach record)."""
+
+    __tablename__ = "submissions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    band_id: Mapped[Optional[int]] = mapped_column(default=None)
+    playlist_id: Mapped[int]
+    song_id: Mapped[Optional[int]] = mapped_column(default=None)
+    pitch_id: Mapped[Optional[int]] = mapped_column(default=None)
+
+    status: Mapped[str] = mapped_column(default=SubmissionStatus.PITCH_SENT.value)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+    notes: Mapped[Optional[str]] = mapped_column(default=None)
+
+    created_at: Mapped[datetime] = mapped_column(default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(default=func.now(), onupdate=func.now())
+
+
+class MiningRunDB(Base):
+    """Database representation of a MiningRun (Phase 1 discovery session)."""
+
+    __tablename__ = "mining_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    band_id: Mapped[Optional[int]] = mapped_column(default=None)
+    style_profile_id: Mapped[int]
+    style_profile_name: Mapped[Optional[str]] = mapped_column(default=None)
+
+    operating_mode: Mapped[str] = mapped_column(default="semi_automatic")
+
+    queries_used_json: Mapped[Optional[str]] = mapped_column(default=None)  # JSON list
+    min_followers: Mapped[int] = mapped_column(default=1000)
+    expansion_explanation: Mapped[Optional[str]] = mapped_column(default=None)
+
+    playlists_found: Mapped[int] = mapped_column(default=0)
+    playlists_imported: Mapped[int] = mapped_column(default=0)
+    top_score: Mapped[Optional[float]] = mapped_column(default=None)
+
+    notes: Mapped[Optional[str]] = mapped_column(default=None)
+
+    started_at: Mapped[datetime] = mapped_column(default=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+
+
 # =============================================================================
 # Engine & Session helpers
 # =============================================================================
@@ -205,18 +301,85 @@ def get_engine(db_path: Optional[Path] = None):
     return create_engine(f"sqlite:///{db_path}", echo=False)
 
 
+# Module-level guard so we only attempt Alembic upgrade once per process
+# (prevents log spam on every get_session() call in Streamlit dev mode)
+_alembic_upgraded = False
+
+
 def get_session(db_path: Optional[Path] = None):
     """Get a new session (creates tables if they don't exist)."""
+    global _alembic_upgraded
+
     engine = get_engine(db_path)
-    Base.metadata.create_all(engine)
 
-    # Phase 0 migration: safely add band_id to style_profiles if missing
-    _migrate_add_band_id_to_styles(engine)
+    # Run Alembic migrations if available (preferred path)
+    if not _alembic_upgraded:
+        import logging
+        alembic_logger = logging.getLogger("alembic")
+        original_level = alembic_logger.level
+        alembic_logger.setLevel(logging.WARNING)  # Suppress noisy INFO during startup
 
-    # Phase 2 migration: safely add album_id to songs if missing
-    _migrate_add_album_id_to_songs(engine)
+        try:
+            from alembic.config import Config
+            from alembic import command
+            from alembic.migration import MigrationContext
+
+            alembic_cfg = Config("alembic.ini")
+            if db_path:
+                alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+
+            # Quiet revision check (no stdout, minimal logging)
+            current_rev = None
+            try:
+                with engine.connect() as connection:
+                    context = MigrationContext.configure(connection)
+                    current_rev = context.get_current_revision()
+            except Exception:
+                current_rev = None
+
+            if current_rev is None or "8efdfa768246" not in str(current_rev):
+                command.upgrade(alembic_cfg, "head")
+
+            _alembic_upgraded = True
+
+        except Exception:
+            # Fallback path (legacy manual migrations)
+            Base.metadata.create_all(engine)
+            _run_legacy_migrations(engine)
+
+            # Auto-stamp if modern tables exist but Alembic version is stale
+            try:
+                from sqlalchemy import inspect
+                inspector = inspect(engine)
+                tables = inspector.get_table_names()
+                if "pitches" in tables or "mining_runs" in tables:
+                    from alembic.config import Config
+                    from alembic import command
+                    alembic_cfg = Config("alembic.ini")
+                    if db_path:
+                        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+                    command.stamp(alembic_cfg, "head")
+            except Exception:
+                pass
+
+            _alembic_upgraded = True
+
+        finally:
+            # Always restore logging level
+            alembic_logger.setLevel(original_level)
+    else:
+        # After first successful run in this process, just ensure tables exist
+        Base.metadata.create_all(engine)
 
     return sessionmaker(bind=engine)()
+
+
+def _run_legacy_migrations(engine):
+    """Temporary fallback for legacy manual migrations during transition to Alembic."""
+    _migrate_add_band_id_to_styles(engine)
+    _migrate_add_album_id_to_songs(engine)
+    _migrate_add_contact_fields_to_playlists(engine)
+    _migrate_add_streaming_links_to_songs(engine)
 
 
 def _migrate_add_band_id_to_styles(engine):
@@ -242,6 +405,34 @@ def _migrate_add_album_id_to_songs(engine):
             columns = [row[1] for row in result.fetchall()]
             if "album_id" not in columns:
                 conn.exec_driver_sql("ALTER TABLE songs ADD COLUMN album_id INTEGER")
+                conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_add_contact_fields_to_playlists(engine):
+    """Safe migration for curator contact mining (curator_json + contact_revealed_via)."""
+    with engine.connect() as conn:
+        try:
+            result = conn.exec_driver_sql("PRAGMA table_info(playlists)")
+            columns = [row[1] for row in result.fetchall()]
+            if "curator_json" not in columns:
+                conn.exec_driver_sql("ALTER TABLE playlists ADD COLUMN curator_json TEXT")
+            if "contact_revealed_via" not in columns:
+                conn.exec_driver_sql("ALTER TABLE playlists ADD COLUMN contact_revealed_via TEXT")
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_add_streaming_links_to_songs(engine):
+    """Safe migration to add streaming_links JSON column to songs table."""
+    with engine.connect() as conn:
+        try:
+            result = conn.exec_driver_sql("PRAGMA table_info(songs)")
+            columns = [row[1] for row in result.fetchall()]
+            if "streaming_links" not in columns:
+                conn.exec_driver_sql("ALTER TABLE songs ADD COLUMN streaming_links TEXT")
                 conn.commit()
         except Exception:
             pass
@@ -378,6 +569,13 @@ class PlaylistRepository:
             except Exception:
                 score_json = None
 
+        curator_json = None
+        if playlist.curator:
+            try:
+                curator_json = playlist.curator.model_dump_json()
+            except Exception:
+                curator_json = None
+
         if existing:
             existing.name = playlist.name
             existing.description = playlist.description
@@ -391,6 +589,8 @@ class PlaylistRepository:
             existing.discovery_query = playlist.discovery_query or existing.discovery_query
             existing.notes = playlist.notes or existing.notes
             existing.do_not_contact = playlist.do_not_contact
+            existing.curator_json = curator_json
+            existing.contact_revealed_via = playlist.contact_revealed_via or existing.contact_revealed_via
 
             self.session.commit()
             self.session.refresh(existing)
@@ -411,6 +611,8 @@ class PlaylistRepository:
                 current_score_json=score_json,
                 notes=playlist.notes,
                 do_not_contact=playlist.do_not_contact,
+                curator_json=curator_json,
+                contact_revealed_via=playlist.contact_revealed_via,
             )
             self.session.add(db_obj)
             self.session.commit()
@@ -440,6 +642,13 @@ class PlaylistRepository:
 
     def count(self) -> int:
         return self.session.query(PlaylistDB).count()
+
+    def clear_all(self) -> int:
+        """Delete all playlist targets. Returns number deleted. Use with extreme caution."""
+        count = self.session.query(PlaylistDB).count()
+        self.session.query(PlaylistDB).delete()
+        self.session.commit()
+        return count
 
 
 # =============================================================================
@@ -597,6 +806,7 @@ class SongRepository:
             key=song.key,
             tempo=song.tempo,
             duration_seconds=song.duration_seconds,
+            streaming_links=song.streaming_links or {},
         )
         self.session.add(db_song)
         self.session.commit()
@@ -617,6 +827,7 @@ class SongRepository:
             key=db_obj.key,
             tempo=db_obj.tempo,
             duration_seconds=db_obj.duration_seconds,
+            streaming_links=db_obj.streaming_links or {},
             created_at=db_obj.created_at,
             updated_at=db_obj.updated_at,
         )
@@ -639,6 +850,7 @@ class SongRepository:
                 key=s.key,
                 tempo=s.tempo,
                 duration_seconds=s.duration_seconds,
+                streaming_links=s.streaming_links or {},
                 created_at=s.created_at,
                 updated_at=s.updated_at,
             )
@@ -659,6 +871,7 @@ class SongRepository:
         db_obj.key = song.key
         db_obj.tempo = song.tempo
         db_obj.duration_seconds = song.duration_seconds
+        db_obj.streaming_links = song.streaming_links or {}
 
         self.session.commit()
         self.session.refresh(db_obj)
@@ -671,6 +884,222 @@ class SongRepository:
         self.session.delete(db_obj)
         self.session.commit()
         return True
+
+
+# =============================================================================
+# Pitch Repository (Phase 0 Hardening)
+# =============================================================================
+
+class PitchRepository:
+    """Data access for generated Pitches."""
+
+    def __init__(self, session=None):
+        self.session = session or get_session()
+
+    def create(self, pitch: Pitch) -> PitchDB:
+        db_pitch = PitchDB(
+            band_id=pitch.band_id,
+            style_profile_id=pitch.style_profile_id,
+            song_id=pitch.song_id,
+            playlist_id=pitch.playlist_id,
+            song_title=pitch.song_title,
+            song_lyrics=pitch.song_lyrics,
+            format=pitch.format.value if hasattr(pitch.format, 'value') else pitch.format,
+            llm_provider=pitch.llm_provider,
+            llm_model=pitch.llm_model,
+            prompt_version=pitch.prompt_version,
+            generated_text=pitch.generated_text,
+            user_edited_text=pitch.user_edited_text,
+            final_text=pitch.final_text,
+            sent=pitch.sent,
+            sent_at=pitch.sent_at,
+            submission_id=pitch.submission_id,
+        )
+        self.session.add(db_pitch)
+        self.session.commit()
+        self.session.refresh(db_pitch)
+        return db_pitch
+
+    def get_by_id(self, pitch_id: int) -> Optional[Pitch]:
+        db_obj = self.session.get(PitchDB, pitch_id)
+        if not db_obj:
+            return None
+        return self._to_pydantic(db_obj)
+
+    def list_by_band(self, band_id: int) -> list[Pitch]:
+        db_pitches = (
+            self.session.query(PitchDB)
+            .filter_by(band_id=band_id)
+            .order_by(PitchDB.created_at.desc())
+            .all()
+        )
+        return [self._to_pydantic(p) for p in db_pitches]
+
+    def mark_sent(self, pitch_id: int) -> Optional[Pitch]:
+        db_obj = self.session.get(PitchDB, pitch_id)
+        if not db_obj:
+            return None
+        db_obj.sent = True
+        db_obj.sent_at = datetime.utcnow()
+        self.session.commit()
+        return self._to_pydantic(db_obj)
+
+    def _to_pydantic(self, db_obj: PitchDB) -> Pitch:
+        fmt = db_obj.format
+        try:
+            pitch_format = PitchFormat(fmt)
+        except ValueError:
+            pitch_format = PitchFormat.EMAIL
+
+        return Pitch(
+            id=db_obj.id,
+            band_id=db_obj.band_id,
+            style_profile_id=db_obj.style_profile_id,
+            song_id=db_obj.song_id,
+            playlist_id=db_obj.playlist_id,
+            song_title=db_obj.song_title,
+            song_lyrics=db_obj.song_lyrics,
+            format=pitch_format,
+            llm_provider=db_obj.llm_provider,
+            llm_model=db_obj.llm_model,
+            prompt_version=db_obj.prompt_version,
+            generated_text=db_obj.generated_text,
+            user_edited_text=db_obj.user_edited_text,
+            final_text=db_obj.final_text,
+            sent=db_obj.sent,
+            sent_at=db_obj.sent_at,
+            submission_id=db_obj.submission_id,
+            created_at=db_obj.created_at,
+        )
+
+
+class SubmissionRepository:
+    """Basic data access for Submissions (Phase 0)."""
+
+    def __init__(self, session=None):
+        self.session = session or get_session()
+
+    def create(self, submission) -> SubmissionDB:
+        # submission can be a Pydantic Submission or a simple dict-like
+        db_sub = SubmissionDB(
+            band_id=getattr(submission, 'band_id', None),
+            playlist_id=submission.playlist_id,
+            song_id=getattr(submission, 'song_id', None),
+            pitch_id=getattr(submission, 'pitch_id', None),
+            status=getattr(submission, 'status', SubmissionStatus.PITCH_SENT).value 
+                   if hasattr(getattr(submission, 'status', None), 'value') 
+                   else str(getattr(submission, 'status', SubmissionStatus.PITCH_SENT)),
+            sent_at=getattr(submission, 'sent_at', None),
+            notes=getattr(submission, 'notes', None),
+        )
+        self.session.add(db_sub)
+        self.session.commit()
+        self.session.refresh(db_sub)
+        return db_sub
+
+    def list_by_band(self, band_id: int) -> list:
+        """Return submissions for a specific band (P0-4 consistency)."""
+        db_subs = (
+            self.session.query(SubmissionDB)
+            .filter_by(band_id=band_id)
+            .order_by(SubmissionDB.created_at.desc())
+            .all()
+        )
+        # Lightweight return; full _to_pydantic can be added later
+        return db_subs
+
+
+# =============================================================================
+# MiningRun Repository (Phase 1)
+# =============================================================================
+
+class MiningRunRepository:
+    """Data access for discovery/mining sessions (Phase 1)."""
+
+    def __init__(self, session=None):
+        self.session = session or get_session()
+
+    def create(self, run: MiningRun) -> MiningRunDB:
+        import json
+
+        queries_json = json.dumps(run.queries_used) if run.queries_used else None
+
+        db_run = MiningRunDB(
+            band_id=run.band_id,
+            style_profile_id=run.style_profile_id,
+            style_profile_name=run.style_profile_name,
+            operating_mode=run.operating_mode.value if hasattr(run.operating_mode, "value") else str(run.operating_mode),
+            queries_used_json=queries_json,
+            min_followers=run.min_followers,
+            expansion_explanation=run.expansion_explanation,
+            playlists_found=run.playlists_found,
+            playlists_imported=run.playlists_imported,
+            top_score=run.top_score,
+            notes=run.notes,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+        )
+        self.session.add(db_run)
+        self.session.commit()
+        self.session.refresh(db_run)
+        return db_run
+
+    def get_by_id(self, run_id: int) -> Optional[MiningRun]:
+        db_obj = self.session.get(MiningRunDB, run_id)
+        if not db_obj:
+            return None
+        return self._to_pydantic(db_obj)
+
+    def list_by_band(self, band_id: int, limit: int = 50) -> list[MiningRun]:
+        db_runs = (
+            self.session.query(MiningRunDB)
+            .filter_by(band_id=band_id)
+            .order_by(MiningRunDB.started_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [self._to_pydantic(r) for r in db_runs]
+
+    def list_recent(self, limit: int = 20) -> list[MiningRun]:
+        db_runs = (
+            self.session.query(MiningRunDB)
+            .order_by(MiningRunDB.started_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [self._to_pydantic(r) for r in db_runs]
+
+    def _to_pydantic(self, db_obj: MiningRunDB) -> MiningRun:
+        import json
+
+        queries = []
+        if db_obj.queries_used_json:
+            try:
+                queries = json.loads(db_obj.queries_used_json)
+            except Exception:
+                queries = []
+
+        try:
+            mode = OperatingMode(db_obj.operating_mode)
+        except Exception:
+            mode = OperatingMode.SEMI_AUTOMATIC
+
+        return MiningRun(
+            id=db_obj.id,
+            band_id=db_obj.band_id,
+            style_profile_id=db_obj.style_profile_id,
+            style_profile_name=db_obj.style_profile_name,
+            operating_mode=mode,
+            queries_used=queries,
+            min_followers=db_obj.min_followers,
+            expansion_explanation=db_obj.expansion_explanation,
+            playlists_found=db_obj.playlists_found,
+            playlists_imported=db_obj.playlists_imported,
+            top_score=db_obj.top_score,
+            notes=db_obj.notes,
+            started_at=db_obj.started_at,
+            completed_at=db_obj.completed_at,
+        )
 
 
 # =============================================================================

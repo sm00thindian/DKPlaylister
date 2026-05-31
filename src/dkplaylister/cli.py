@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -27,7 +28,8 @@ from dkplaylister.scoring import (
     load_scoring_config,
     list_scoring_configs,
 )
-from dkplaylister.spotify import fetch_playlist
+import spotipy
+from dkplaylister.spotify import fetch_playlist, get_client, get_user_client, _handle_rate_limit
 from dkplaylister.storage import (
     BandRepository,
     SongRepository,
@@ -44,6 +46,13 @@ def _import_playlist(
     name: Optional[str] = None,
     score_it: bool = True,
     verbose: bool = True,
+    band_id: Optional[int] = None,   # Scope style selection to this band's latest style
+    # Option 2: Rich Playlister/manual contact capture
+    curator_email: Optional[str] = None,
+    curator_instagram: Optional[str] = None,
+    curator_website: Optional[str] = None,
+    contact_notes: Optional[str] = None,
+    contact_revealed_via: Optional[str] = None,
 ) -> Optional[int]:
     """
     Core logic to import a single playlist.
@@ -70,8 +79,27 @@ def _import_playlist(
         playlist.source = PlaylistSource.PLAYLISTER
     playlist.discovery_query = query
 
+    # Option 2: Attach explicit contact info from Playlister popup / manual entry
+    if any([curator_email, curator_instagram, curator_website, contact_notes, contact_revealed_via]):
+        from dkplaylister.models import Curator
+        existing_curator = playlist.curator or Curator()
+        if curator_email:
+            existing_curator.email = curator_email
+        if curator_instagram:
+            existing_curator.instagram = curator_instagram
+        if curator_website:
+            existing_curator.website = curator_website
+        if contact_notes:
+            existing_curator.notes = contact_notes
+        playlist.curator = existing_curator
+
+        if contact_revealed_via:
+            playlist.contact_revealed_via = contact_revealed_via
+        elif "playlister" in str(playlist.source).lower():
+            playlist.contact_revealed_via = "playlister_popup"
+
     if score_it:
-        style = style_repo.get_latest()
+        style = style_repo.get_latest(band_id=band_id)
         if style:
             try:
                 scorer = PlaylistScorer(style)
@@ -155,45 +183,300 @@ def search(
 
 @app.command()
 def init(
-    force: bool = typer.Option(False, "--force", help="Overwrite existing config/db"),
+    force: bool = typer.Option(False, "--force", help="Re-run migrations even on existing DB (safe)"),
 ):
-    """Initialize local database and config for DKPlaylister."""
+    """Initialize (or repair) local database and run Alembic migrations.
+
+    Safe to run multiple times. Creates data/ dir and DB if missing, then
+    ensures schema is at head via Alembic (with legacy fallback).
+    """
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
 
     db_path = data_dir / "dkplaylister.db"
-    if db_path.exists() and not force:
-        console.print(f"[yellow]Database already exists at {db_path}[/]")
-        console.print("Use --force to reinitialize.")
+    existed = db_path.exists()
+
+    # Always touch + run migrations (idempotent)
+    db_path.touch(exist_ok=True)
+
+    from dkplaylister.storage import get_session
+    get_session(db_path)
+
+    console.print(f"[green]✓[/] Database ready at [bold]{db_path}[/] " + ("(existing)" if existed else "(new)"))
+
+    # Basic env validation (P0-5)
+    from dotenv import load_dotenv
+    load_dotenv()
+    xai = bool(os.getenv("XAI_API_KEY"))
+    sp_id = bool(os.getenv("SPOTIFY_CLIENT_ID"))
+    sp_secret = bool(os.getenv("SPOTIFY_CLIENT_SECRET"))
+
+    console.print("\n[bold]Environment check:[/]")
+    console.print(f"  XAI_API_KEY: {'✓ present' if xai else '[yellow]MISSING[/] (required for Grok pitches)'}")
+    console.print(f"  SPOTIFY_CLIENT_ID: {'✓ present' if sp_id else '[yellow]MISSING[/]'}")
+    console.print(f"  SPOTIFY_CLIENT_SECRET: {'✓ present' if sp_secret else '[yellow]MISSING[/]'}")
+
+    if not (xai and sp_id and sp_secret):
+        console.print("\n[dim]Tip: copy .env.example to .env and fill credentials.[/]")
+    console.print(
+        "[dim]Next: run [bold]dkplaylister auth spotify --status[/] or [bold]dkplaylister doctor[/] for full health.[/]"
+    )
+
+
+@app.command()
+def doctor():
+    """Health check: database, schema, data counts, credentials, and auth status.
+
+    Run this after init or when things feel off. Non-destructive.
+    """
+    console.print(Panel.fit("DKPlaylister Doctor — Phase 0 + Phase 1 Health Check", border_style="cyan"))
+
+    # 1. DB + basic counts
+    data_dir = Path("data")
+    db_path = data_dir / "dkplaylister.db"
+    db_ok = db_path.exists()
+
+    console.print(f"\n[bold]Database:[/] {db_path} — {'✓ exists' if db_ok else '[red]MISSING[/]'}")
+
+    if not db_ok:
+        console.print("[yellow]Run `dkplaylister init` first.[/]")
         raise typer.Exit(1)
 
-    # In future: run migrations
-    db_path.touch()
-    console.print(f"[green]✓[/] Initialized database at [bold]{db_path}[/]")
-    console.print(
-        "[dim]Next steps: copy .env.example → .env, add your Spotify credentials, "
-        "then run [bold]dkplaylister auth spotify[/][/]"
-    )
+    try:
+        from dkplaylister.storage import (
+            get_session, BandRepository, StyleProfileRepository, SongRepository,
+            AlbumRepository, PlaylistRepository, PitchRepository, SubmissionRepository
+        )
+        # Force a session (runs migrations if needed)
+        get_session(db_path)
+        band_repo = BandRepository()
+        style_repo = StyleProfileRepository()
+        song_repo = SongRepository()
+        album_repo = AlbumRepository()
+        pl_repo = PlaylistRepository()
+        pitch_repo = PitchRepository()
+        sub_repo = SubmissionRepository()
+
+        bands = band_repo.list_all()
+        default_band = band_repo.get_default()
+
+        console.print(f"  Bands: {len(bands)}  (default: {default_band.name if default_band else 'none'})")
+        for b in bands[:5]:
+            styles = style_repo.list_all(band_id=b.id)
+            songs = song_repo.list_by_band(b.id)
+            console.print(f"    • {b.name} (ID {b.id}): {len(styles)} styles, {len(songs)} songs")
+
+        targets = pl_repo.count()
+        pitches = len(pitch_repo.list_by_band(bands[0].id)) if bands else 0  # sample one band
+        console.print(f"  Playlist targets (global): {targets}")
+        console.print(f"  Pitches (sample band): {pitches}")
+
+        # Phase 1: Mining stats (H1)
+        try:
+            from dkplaylister.storage import MiningRunRepository
+            mining_repo = MiningRunRepository()
+            recent_mines = mining_repo.list_recent(5)
+            console.print(f"  Mining Runs (recent): {len(recent_mines)}")
+            if recent_mines:
+                last = recent_mines[0]
+                console.print(f"    Last: {last.style_profile_name or last.style_profile_id} → {last.playlists_found} found")
+        except Exception:
+            pass
+
+    except Exception as e:
+        console.print(f"[red]DB access error: {e}[/]")
+        console.print("[dim]Try `dkplaylister init --force` or check alembic setup.[/]")
+
+    # 2. Env
+    from dotenv import load_dotenv
+    load_dotenv()
+    console.print("\n[bold]Environment (.env):[/]")
+    checks = {
+        "XAI_API_KEY": os.getenv("XAI_API_KEY"),
+        "SPOTIFY_CLIENT_ID": os.getenv("SPOTIFY_CLIENT_ID"),
+        "SPOTIFY_CLIENT_SECRET": os.getenv("SPOTIFY_CLIENT_SECRET"),
+        "SPOTIFY_REDIRECT_URI": os.getenv("SPOTIFY_REDIRECT_URI"),
+    }
+    for k, v in checks.items():
+        status = "✓" if v else "[yellow]MISSING[/]"
+        console.print(f"  {k}: {status}")
+
+    # 3. Spotify auth status (lightweight, no browser)
+    console.print("\n[bold]Spotify Auth:[/]")
+    try:
+        from spotipy.oauth2 import SpotifyOAuth
+        cache_path = Path.home() / ".cache" / "spotipy_token_cache.json"  # default spotipy location
+        # Try common cache names used by the project
+        candidates = [
+            Path(".spotipy_cache"),
+            Path.home() / ".cache" / "spotipy" / "token_cache.json",
+            Path(os.getenv("SPOTIPY_CACHE_PATH", "")) if os.getenv("SPOTIPY_CACHE_PATH") else None,
+        ]
+        token_found = False
+        for c in [p for p in candidates if p]:
+            if c and c.exists():
+                token_found = True
+                console.print(f"  Token cache: ✓ found at {c}")
+                break
+        if not token_found:
+            console.print("  Token cache: [yellow]none found[/]")
+            console.print("  [dim]Run: dkplaylister auth spotify[/]")
+
+        # Quick validation if we can
+        if os.getenv("SPOTIFY_CLIENT_ID"):
+            auth_manager = SpotifyOAuth(
+                client_id=os.getenv("SPOTIFY_CLIENT_ID"),
+                client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
+                redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback"),
+                cache_path=str(Path(".spotipy_cache")),
+                scope="user-read-private user-read-email user-top-read",
+            )
+            token = auth_manager.get_cached_token()
+            if token and not auth_manager.is_token_expired(token):
+                console.print("  Cached token: ✓ valid (not expired)")
+            elif token:
+                console.print("  Cached token: [yellow]expired (will refresh on use)[/]")
+            else:
+                console.print("  Cached token: [yellow]none or invalid[/]")
+    except Exception as e:
+        console.print(f"  [dim]Auth probe skipped ({e})[/]")
+
+    # 4. Recommendations
+    console.print("\n[bold]Recommendations:[/]")
+    if not bands:
+        console.print("  • Create your first band: sidebar in UI or `dkplaylister band create ...` (CLI)")
+    if targets == 0:
+        console.print("  • Import targets: `dkplaylister add <url>` or use Streamlit 'Process Playlister Imports'")
+    console.print("  • Full UI: `streamlit run ui/streamlit_app.py`")
+    console.print("  • Re-check after fixes: `dkplaylister doctor`")
+    console.print(Panel.fit("Phase 0 foundation looks healthy when you see bands + styles + songs + scored targets.", border_style="green"))
 
 
 @app.command()
 def auth(
     service: str = typer.Argument(..., help="Service to authenticate (spotify)"),
+    scopes: str = typer.Option(
+        "user-read-private user-read-email user-top-read",
+        "--scopes",
+        "-s",
+        help="Space-separated list of Spotify scopes to request",
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-authentication even if a valid token exists"
+    ),
+    status: bool = typer.Option(
+        False, "--status", help="Check current authentication status without opening browser"
+    ),
 ):
-    """Authenticate with external services (Spotify, etc.)."""
-    if service.lower() == "spotify":
-        console.print(
-            Panel(
-                "Spotify OAuth flow will be implemented here using spotipy.\n\n"
-                "1. Ensure SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are in your .env\n"
-                "2. Run this command to open browser for authorization",
-                title="Spotify Auth (stub)",
-                border_style="blue",
-            )
-        )
-    else:
+    """
+    Authenticate with Spotify using the Authorization Code Flow.
+
+    This opens a browser window where you can log in and grant the requested permissions.
+    Your tokens are cached locally (in .spotify_cache by default) so you don't have to
+    log in every time.
+    """
+    if service.lower() != "spotify":
         console.print(f"[red]Unknown service: {service}[/]")
         raise typer.Exit(1)
+
+    if status:
+        _show_spotify_auth_status()
+        return
+
+    console.print("[bold]Starting Spotify Authorization Code Flow...[/]")
+
+    requested_scopes = scopes.split() if scopes else None
+
+    try:
+        # This will open the browser if no valid cached token exists
+        sp = get_user_client(scopes=requested_scopes, open_browser=True)
+
+        # Force token refresh if --force was used
+        if force:
+            sp.auth_manager.get_access_token(as_dict=False)
+
+        # Verify we can actually talk to the API
+        user = sp.current_user()
+        display_name = user.get("display_name") or user.get("id")
+        email = user.get("email", "hidden (no user-read-email scope)")
+
+        console.print(
+            Panel.fit(
+                f"[green]✓ Successfully authenticated with Spotify![/]\n\n"
+                f"User: [bold]{display_name}[/]\n"
+                f"Email: {email}\n"
+                f"User ID: {user.get('id')}\n"
+                f"Requested scopes: {scopes or '(none)'}",
+                title="Spotify Authentication Successful",
+                border_style="green",
+            )
+        )
+
+    except Exception as e:
+        console.print(
+            Panel(
+                f"[red]Authentication failed:[/]\n\n{str(e)}\n\n"
+                "Common issues:\n"
+                "• SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET not set in .env\n"
+                "• Redirect URI in your Spotify app settings doesn't match SPOTIFY_REDIRECT_URI\n"
+                "• Browser popup was blocked",
+                title="Spotify Auth Error",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
+
+
+def _show_spotify_auth_status():
+    """Check and display current Spotify auth status without triggering login."""
+    from spotipy.oauth2 import SpotifyOAuth
+
+    client_id = os.getenv("SPOTIFY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+    redirect_uri = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
+    cache_path = os.getenv("SPOTIFY_CACHE_PATH", ".spotify_cache")
+
+    if not client_id or not client_secret:
+        console.print("[red]SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are not set.[/]")
+        return
+
+    auth_manager = SpotifyOAuth(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        cache_path=cache_path,
+    )
+
+    token_info = auth_manager.get_cached_token()
+
+    if not token_info:
+        console.print("[yellow]No Spotify token found in cache.[/]")
+        console.print("Run [bold]dkplaylister auth spotify[/] to log in.")
+        return
+
+    # Check if token is still valid
+    if auth_manager.is_token_expired(token_info):
+        console.print("[yellow]Cached token exists but is expired.[/]")
+        console.print("Run [bold]dkplaylister auth spotify[/] to refresh.")
+        return
+
+    try:
+        sp = spotipy.Spotify(auth_manager=auth_manager)
+        user = sp.current_user()
+        display_name = user.get("display_name") or user.get("id")
+
+        console.print(
+            Panel.fit(
+                f"[green]✓ Spotify authentication is active[/]\n\n"
+                f"User: [bold]{display_name}[/]\n"
+                f"User ID: {user.get('id')}\n"
+                f"Token expires in: {token_info.get('expires_in', 'unknown')} seconds",
+                title="Spotify Auth Status",
+                border_style="green",
+            )
+        )
+    except Exception as e:
+        console.print(f"[red]Token exists but appears invalid:[/] {e}")
 
 
 @app.command()
@@ -376,6 +659,56 @@ def style_list(band_id: Optional[int] = typer.Option(None, "--band", help="Filte
         )
 
     console.print(table)
+
+
+@style_app.command("expand")
+def style_expand(
+    style_id: Optional[int] = typer.Option(None, "--style-id", help="Specific Style Profile ID"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Use latest style for this band"),
+    use_latest: bool = typer.Option(True, "--latest/--no-latest", help="Use the most recent style for the band"),
+):
+    """(Phase 1) Expand a Style Profile into discovery queries, genres, and search terms using Grok.
+
+    This is the foundation for intelligent mining. The output can later feed the `mine` command.
+    """
+    from dkplaylister.llm import get_provider
+
+    repo = StyleProfileRepository()
+
+    if style_id:
+        style = repo.get_by_id(style_id)
+    else:
+        style = repo.get_latest(band_id=band_id)
+
+    if not style:
+        console.print("[red]No Style Profile found. Use --style-id or make sure you have a saved style.[/]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Expanding style:[/] {style.name} (ID {style.id})")
+
+    try:
+        provider = get_provider("grok")
+        expansion = provider.expand_style_for_discovery(style)
+
+        console.print(Panel.fit(
+            f"[bold]Primary Genres:[/] {', '.join(expansion.primary_genres) or '—'}\n"
+            f"[bold]Sub-genres:[/] {', '.join(expansion.sub_genres) or '—'}\n"
+            f"[bold]Moods:[/] {', '.join(expansion.moods) or '—'}\n"
+            f"[bold]Similar Artists:[/] {', '.join(expansion.similar_artists) or '—'}",
+            title="Discovery Profile",
+            border_style="cyan"
+        ))
+
+        if expansion.search_queries:
+            console.print("\n[bold]Recommended Search Queries:[/]")
+            for q in expansion.search_queries:
+                console.print(f"  • {q}")
+
+        if expansion.explanation:
+            console.print(f"\n[dim]{expansion.explanation}[/]")
+
+    except Exception as e:
+        console.print(f"[red]Expansion failed: {e}[/]")
 
 
 # =============================================================================
@@ -639,6 +972,34 @@ def db_migrate_legacy_styles(band_id: Optional[int] = typer.Option(None, "--band
     console.print(f"[green]✓[/] Migrated {count} legacy styles to band {band_id}.")
 
 
+@db_app.command("clear-targets")
+def db_clear_targets(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip interactive confirmation"),
+):
+    """Permanently delete ALL saved playlist targets (the scored Playlister/Spotify results).
+
+    This is useful when you want a completely fresh set of targets scored against
+    your current style and songs (e.g. after refining your style prompt or adding new songs).
+    """
+    repo = PlaylistRepository()
+    current_count = repo.count()
+
+    if current_count == 0:
+        console.print("[yellow]No playlist targets to clear.[/]")
+        return
+
+    if not yes:
+        console.print(f"[bold red]WARNING:[/] This will permanently delete all {current_count} playlist targets.")
+        console.print("This action cannot be undone (though you can always re-import from Playlister).")
+        if not typer.confirm("Are you sure you want to proceed?"):
+            console.print("Aborted.")
+            raise typer.Exit()
+
+    deleted = repo.clear_all()
+    console.print(f"[green]✓ Cleared {deleted} playlist targets.[/]")
+    console.print("[dim]You can now re-import fresh results from Playlister using `add` or `import`.[/]")
+
+
 # =============================================================================
 # Mining / Ingestion Commands (Semi-automatic flow)
 # =============================================================================
@@ -650,10 +1011,20 @@ def add(
     query: Optional[str] = typer.Option(None, "--query", "-q", help="The search term used on Playlister (for provenance)"),
     name: Optional[str] = typer.Option(None, "--name", help="Override playlist name"),
     score_it: bool = typer.Option(True, "--score/--no-score", help="Automatically score against latest StyleProfile"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Band ID to scope style lookup for scoring"),
+    # Option 2: Capture contact details shown in DistroKid Playlister popup (highly recommended)
+    curator_email: Optional[str] = typer.Option(None, "--curator-email", help="Email from Playlister popup"),
+    curator_instagram: Optional[str] = typer.Option(None, "--curator-instagram", help="IG handle from Playlister popup"),
+    curator_website: Optional[str] = typer.Option(None, "--curator-website", "--contact-url", help="bit.ly / form / website from Playlister popup"),
+    contact_notes: Optional[str] = typer.Option(None, "--contact-notes", help="Any extra notes about contacting this curator"),
+    contact_revealed_via: Optional[str] = typer.Option(None, "--contact-via", help="playlister_popup | description | manual"),
 ):
     """Add a single playlist (typically from Playlister) into your targets database.
 
     For importing many playlists at once, use `dkplaylister import` instead.
+
+    Use the --curator-* flags when you have the popup details from Playlister.
+    This captures the actual contact method the curator chose to share.
     """
     playlist_id = _import_playlist(
         url=url,
@@ -662,6 +1033,12 @@ def add(
         name=name,
         score_it=score_it,
         verbose=True,
+        band_id=band_id,
+        curator_email=curator_email,
+        curator_instagram=curator_instagram,
+        curator_website=curator_website,
+        contact_notes=contact_notes,
+        contact_revealed_via=contact_revealed_via,
     )
 
     if playlist_id is None:
@@ -690,15 +1067,25 @@ def import_playlists(
     source: str = typer.Option("playlister", "--source", help="playlister | spotify | manual"),
     query: Optional[str] = typer.Option(None, "--query", "-q", help="Playlister search term (applied to all imported playlists)"),
     score_it: bool = typer.Option(True, "--score/--no-score", help="Score all imported playlists"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Band ID to scope style lookup for scoring (uses default band if omitted)"),
+    # Option 2: Same rich contact flags available for bulk (applied to every URL in the batch)
+    curator_email: Optional[str] = typer.Option(None, "--curator-email", help="Email from Playlister popup (applied to all)"),
+    curator_instagram: Optional[str] = typer.Option(None, "--curator-instagram", help="IG handle from Playlister popup (applied to all)"),
+    curator_website: Optional[str] = typer.Option(None, "--curator-website", "--contact-url", help="bit.ly/form/website (applied to all)"),
+    contact_notes: Optional[str] = typer.Option(None, "--contact-notes", help="Notes (applied to all in batch)"),
+    contact_revealed_via: Optional[str] = typer.Option("playlister_popup", "--contact-via", help="playlister_popup | description | manual"),
 ):
     """
     Bulk import playlists (ideal for results from Playlister.com).
 
     You can pass URLs directly or use --file with a text file (one URL per line).
 
+    When importing from Playlister, use the --curator-* flags (or --contact-via)
+    to record the actual contact method shown in the Playlister popup for every item.
+
     Examples:
       dkplaylister import https://open.spotify.com/playlist/xxx --query "Indie Cinematic"
-      dkplaylister import --file my-playlister-results.txt --query "Cinematic"
+      dkplaylister import --file my-playlister-results.txt --query "Cinematic" --curator-email foo@bar.com
     """
     all_urls: list[str] = []
 
@@ -739,6 +1126,12 @@ def import_playlists(
             query=query,
             score_it=score_it,
             verbose=False,
+            band_id=band_id,
+            curator_email=curator_email,
+            curator_instagram=curator_instagram,
+            curator_website=curator_website,
+            contact_notes=contact_notes,
+            contact_revealed_via=contact_revealed_via,
         )
 
         if playlist_id:
@@ -773,6 +1166,7 @@ def targets_list(
     table.add_column("Name")
     table.add_column("Score", justify="right")
     table.add_column("Followers", justify="right")
+    table.add_column("Contact")
     table.add_column("Source / Query")
 
     for t in targets:
@@ -781,11 +1175,18 @@ def targets_list(
         if t.discovery_query:
             source_str += f" ({t.discovery_query})"
 
+        contact_str = t.contact_summary
+        if t.has_contact_info:
+            contact_str = f"[green]{contact_str}[/]"
+        else:
+            contact_str = f"[dim]{contact_str}[/]"
+
         table.add_row(
             str(t.id),
-            t.name[:45] + ("..." if len(t.name) > 45 else ""),
+            t.name[:40] + ("..." if len(t.name) > 40 else ""),
             score_str,
             f"{t.follower_count:,}" if t.follower_count else "—",
+            contact_str,
             source_str,
         )
 
@@ -801,6 +1202,7 @@ def score(
     playlist_url: str = typer.Argument(..., help="Spotify playlist URL to score"),
     playlist_name: Optional[str] = typer.Option(None, "--name", "-n", help="Playlist name (optional but helpful)"),
     style_id: Optional[int] = typer.Option(None, "--style-id", help="Specific Style Profile ID"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Band ID to scope the style lookup"),
     use_latest: bool = typer.Option(True, "--latest/--no-latest", help="Use latest saved Style Profile"),
     show_breakdown: bool = typer.Option(True, "--breakdown/--no-breakdown", help="Show detailed score breakdown"),
     # Quick weight overrides for experimentation
@@ -818,7 +1220,7 @@ def score(
     if style_id:
         style = repo.get_by_id(style_id)
     else:
-        style = repo.get_latest()
+        style = repo.get_latest(band_id=band_id)
 
     if not style:
         console.print("[red]No Style Profile found. Run [bold]dkplaylister style set[/] first.[/]")
@@ -887,6 +1289,217 @@ def score(
             )
 
         console.print(table)
+
+
+# =============================================================================
+# Phase 1: Discovery / Mining Command
+# =============================================================================
+
+@app.command()
+def mine(
+    band_id: Optional[int] = typer.Option(None, "--band", help="Band to use for style expansion"),
+    limit: int = typer.Option(25, "--limit", "-l", help="Maximum number of candidates to evaluate"),
+    min_score: Optional[float] = typer.Option(None, "--min-score", help="Only show results above this score"),
+    auto_import: bool = typer.Option(False, "--import", help="Automatically import all results above min_score"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview queries and estimated candidates without calling Spotify (Phase 1)"),
+    queries_file: Optional[Path] = typer.Option(None, "--queries-file", help="File with one search query per line (overrides LLM expansion for full control)"),
+):
+    """(Phase 1) Discover new playlist targets using your Style Profile.
+
+    Expands your style into smart search queries, searches Spotify, enriches,
+    scores, and presents ranked candidates. Records full MiningRun for history.
+
+    Use --dry-run to preview queries without API calls.
+    """
+    from dkplaylister.llm import get_provider
+    from dkplaylister.scoring import PlaylistScorer, ScoringConfig
+
+    style_repo = StyleProfileRepository()
+    style = style_repo.get_latest(band_id=band_id)
+
+    if not style:
+        console.print("[red]No Style Profile found for this band. Create one first with `style set`.[/]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Mining with style:[/] {style.name} (ID {style.id})")
+
+    # 1. Expand + queries (full-featured support)
+    from dkplaylister.discovery import expand_style_for_discovery, run_discovery_mining
+
+    expansion = expand_style_for_discovery(style, llm_provider=get_provider("grok"))
+
+    if queries_file:
+        if not queries_file.exists():
+            console.print(f"[red]Queries file not found: {queries_file}[/]")
+            raise typer.Exit(1)
+        queries = [line.strip() for line in queries_file.read_text().splitlines() if line.strip()]
+        console.print(f"[bold]Using {len(queries)} queries from {queries_file}[/]")
+    else:
+        queries = expansion.search_queries or [style.raw_prompt[:80]]
+        console.print(f"[dim]Using {len(queries)} expanded search queries...[/]")
+
+    if dry_run:
+        console.print(Panel.fit(
+            "\n".join(f"  • {q}" for q in queries[:10]),
+            title="Dry Run — Search Queries (no API calls made)",
+            border_style="yellow"
+        ))
+        console.print(f"[dim]Would search for up to ~{limit} candidates. Re-run without --dry-run to execute.[/]")
+        return
+
+    # 2. Use the shared discovery mining engine (full-featured + DRY)
+    mining_result = run_discovery_mining(
+        style=style,
+        queries=queries,
+        limit=limit,
+        min_score=min_score,
+        llm_provider=get_provider("grok"),
+    )
+
+    candidates = mining_result["candidates"]
+    queries = mining_result["queries_used"]
+    query_stats = mining_result["query_stats"]
+    expansion = mining_result["expansion"]
+
+    if query_stats:
+        console.print(f"[dim]Per-query candidates: {query_stats}[/]")
+
+    if not candidates:
+        console.print("[yellow]No candidates found. Try a different style or broader queries.[/]")
+        return
+
+    if not candidates:
+        console.print("[yellow]No candidates met the minimum score threshold.[/]")
+        return
+
+    # candidates from run_discovery_mining are already scored + filtered
+    scored = [(pl, getattr(getattr(pl, "current_score", None), "total_value_score", 0)) for pl in candidates]
+
+    # 4. Display results
+    table = Table(title=f"Mining Results for {style.name} (showing {len(scored)})")
+    table.add_column("Score", justify="right", style="cyan")
+    table.add_column("Name")
+    table.add_column("Followers", justify="right")
+    table.add_column("URL", style="dim")
+
+    for pl, score in scored[:30]:
+        table.add_row(
+            f"{score:.0f}",
+            pl.name[:45] + ("..." if len(pl.name) > 45 else ""),
+            f"{pl.follower_count:,}" if pl.follower_count else "—",
+            str(pl.url),
+        )
+
+    console.print(table)
+
+    # 5. Optional auto-import
+    imported = 0
+    if auto_import:
+        for pl, score in scored:
+            try:
+                PlaylistRepository().create_or_update(pl)
+                imported += 1
+            except Exception:
+                pass
+        console.print(f"\n[green]Auto-imported {imported} playlists.[/]")
+    else:
+        console.print(f"\n[dim]Use `dkplaylister add <url>` or the UI to import promising targets.[/]")
+
+    # 6. Record MiningRun (Phase 1 hardening - H1)
+    try:
+        from dkplaylister.storage import MiningRunRepository
+        from dkplaylister.models import MiningRun, OperatingMode
+
+        top_score = scored[0][1] if scored else None
+
+        run = MiningRun(
+            band_id=band_id or (getattr(style, 'band_id', None)),
+            style_profile_id=style.id,
+            style_profile_name=style.name,
+            operating_mode=OperatingMode.SEMI_AUTOMATIC,
+            queries_used=queries,
+            min_followers=0,
+            expansion_explanation=getattr(expansion, 'explanation', None),
+            playlists_found=len(candidates),
+            playlists_imported=imported,
+            top_score=top_score,
+            notes=f"Per-query: {query_stats}" if query_stats else None,
+            completed_at=datetime.utcnow(),
+        )
+        MiningRunRepository().create(run)
+        console.print(f"[dim]MiningRun recorded (ID {run.id if hasattr(run, 'id') else 'new'}). Use `dkplaylister mining history` to view.[/]")
+    except Exception as e:
+        console.print(f"[yellow]Could not record MiningRun: {e}[/]")
+
+
+# =============================================================================
+# Phase 1: Mining History Commands (H1)
+# =============================================================================
+
+@app.command("mining")
+def mining_app(
+    subcommand: str = typer.Argument("history", help="history | show"),
+    run_id: Optional[int] = typer.Argument(None, help="Run ID for 'show'"),
+    band_id: Optional[int] = typer.Option(None, "--band", help="Filter history by band"),
+    limit: int = typer.Option(20, "--limit", "-l"),
+):
+    """Phase 1 mining session history and details."""
+    from dkplaylister.storage import MiningRunRepository
+
+    repo = MiningRunRepository()
+
+    if subcommand == "history":
+        if band_id:
+            runs = repo.list_by_band(band_id, limit=limit)
+            title = f"Mining Runs for Band {band_id}"
+        else:
+            runs = repo.list_recent(limit=limit)
+            title = "Recent Mining Runs"
+
+        if not runs:
+            console.print("[yellow]No mining runs recorded yet. Run `dkplaylister mine` first.[/]")
+            return
+
+        table = Table(title=title)
+        table.add_column("ID", justify="right", style="cyan")
+        table.add_column("Band", justify="right")
+        table.add_column("Style")
+        table.add_column("Found", justify="right")
+        table.add_column("Imported", justify="right")
+        table.add_column("Top Score", justify="right")
+        table.add_column("When")
+
+        for r in runs:
+            table.add_row(
+                str(r.id),
+                str(r.band_id) if r.band_id else "—",
+                r.style_profile_name or str(r.style_profile_id),
+                str(r.playlists_found),
+                str(r.playlists_imported),
+                f"{r.top_score:.0f}" if r.top_score else "—",
+                r.started_at.strftime("%Y-%m-%d %H:%M"),
+            )
+        console.print(table)
+
+    elif subcommand == "show" and run_id:
+        run = repo.get_by_id(run_id)
+        if not run:
+            console.print(f"[red]MiningRun {run_id} not found.[/]")
+            raise typer.Exit(1)
+
+        console.print(Panel.fit(
+            f"[bold]Style:[/] {run.style_profile_name} (ID {run.style_profile_id})\n"
+            f"[bold]Band:[/] {run.band_id or '—'}\n"
+            f"[bold]Queries Used:[/]\n" + "\n".join(f"  • {q}" for q in run.queries_used[:8]) + "\n"
+            f"[bold]Results:[/] {run.playlists_found} found, {run.playlists_imported} imported\n"
+            f"[bold]Top Score:[/] {run.top_score}\n"
+            f"[bold]Started:[/] {run.started_at}\n"
+            f"[bold]Explanation:[/] {run.expansion_explanation or '—'}",
+            title=f"MiningRun #{run.id}",
+            border_style="cyan"
+        ))
+    else:
+        console.print("[yellow]Usage: dkplaylister mining history [--band X] or dkplaylister mining show <run_id>[/]")
 
 
 # =============================================================================

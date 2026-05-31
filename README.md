@@ -65,15 +65,24 @@ DKPlaylister treats Playlister as one powerful input among others (Spotify direc
 
 ## Updated Roadmap
 
-### Phase 0: Foundation (Current)
+### Phase 0: Foundation (Complete)
 - Solid local database + provenance tracking
 - StyleProfile, Playlist, Pitch, and Submission models
 - Configurable prioritization and scoring engine
 - Pluggable Grok-first LLM layer
+- Full multi-band catalog (Bands, Styles, Albums, Songs)
+- Hardened `init` + `doctor` + consistent band scoping
 
-**In progress (Data Model v2):** Multi-band support with Bands, multiple Styles per band, and multiple Songs/Lyrics per band. See `docs/data-model-v2.md`.
+See [docs/foundation-tools.md](docs/foundation-tools.md) for the complete reference.
 
-### Phase 1: Discovery & Mining (Next)
+### Phase 1: Discovery & Mining (In Progress + Hardening)
+- Style Prompt → intelligent query generation & target mining (`style expand`, `mine`)
+- `MiningRun` provenance tracking (in progress)
+- Improved assisted import workflows
+
+**Hardening Plan** (to make Phase 1 rock solid): [docs/phase-1-hardening-plan.md](docs/phase-1-hardening-plan.md)
+
+See [docs/phase-1-discovery-mining-plan.md](docs/phase-1-discovery-mining-plan.md) for the original feature vision.
 - Strong Playlister + Spotify hybrid ingestion
 - Style Prompt → genre expansion → target mining
 - Smart ranking with explainable scores
@@ -89,6 +98,18 @@ DKPlaylister treats Playlister as one powerful input among others (Spotify direc
 - Campaign management
 - "What worked" analytics
 - Optional automation with strict safeguards
+
+### Spotify User Authentication & Personalization (Cross-cutting)
+- **Current (Activated):** Authorization Code Flow support + `user-top-read` as default scope
+- **High Value Next:** Leverage `user-top-read` + `user-library-read` to dramatically improve scoring accuracy and pitch personalization by understanding the artist's actual taste
+- **Strategic Opportunities:**
+  - Use artist's top artists/tracks as strong signals in the scoring engine
+  - Allow "Enhance Style Profile from my listening history" feature
+  - Read private playlists for better style reference material
+  - Future: `playlist-modify-private` to auto-maintain a "My Pitch Targets" playlist
+  - Future: `user-library-modify` for one-click saving of high-value targets
+
+See [docs/spotify-user-auth-plan.md](docs/spotify-user-auth-plan.md) for detailed prioritization of user data features and the full development plan.
 
 ## Ethical & Legal Notes
 
@@ -141,6 +162,22 @@ dkplaylister pitch --song "If I Get My Say" --playlist <id-or-url>
 ```
 
 See the evolving docs in `/docs`.
+
+**Key reference after Phase 0 completion:**
+- [Foundation Tools Reference](docs/foundation-tools.md) — Complete list of the hardened core commands and interfaces.
+
+**Foundation Tools at a Glance**
+
+| Category             | Main Commands                              |
+|----------------------|--------------------------------------------|
+| Setup & Health       | `init`, `doctor`                           |
+| Multi-Band Catalog   | `band`, `style`, `song`                    |
+| Targets & Scoring    | `add`, `import`, `targets`, `score`        |
+| Pitch Generation     | `pitch` (CLI) + full UI workflow           |
+| Authentication       | `auth spotify`                             |
+| Database Utilities   | `db migrate-legacy-styles`, `db clear-targets` |
+
+Full details in the [Foundation Tools Reference](docs/foundation-tools.md).
 
 ## Example Style Prompt (Real Test Data)
 

@@ -1,0 +1,16 @@
+{
+  "Kilynn Ross - Expanded Styles": {
+    "queries": [
+      "atmospheric indie rock playlists",
+      "cinematic indie folk",
+      "reverb drenched indie ballads",
+      "baritone male indie folk",
+      "dreamy expansive indie rock",
+      "jangly atmospheric guitars indie",
+      "emotional cinematic indie playlists"
+    ],
+    "limit": 25,
+    "min_score": 50,
+    "exclude_existing": true
+  }
+}

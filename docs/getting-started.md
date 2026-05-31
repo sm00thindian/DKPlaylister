@@ -84,6 +84,9 @@ The UI lets you:
 
 See the main [README](../README.md) for the current vision and roadmap.
 
+**After completing Phase 0**, the authoritative reference for the hardened foundation is:
+- [Foundation Tools Reference](foundation-tools.md) — Every stable command and interface you can rely on.
+
 ## Tips for Effective Use
 
 - Your Style Prompt is the foundation. The more specific and vivid, the better the results.
